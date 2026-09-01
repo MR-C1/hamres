@@ -22,7 +22,8 @@ import psutil
 import requests
 from flask import Flask
 
-from tasks import TASKS, run_task
+from tasks import TASKS
+from runner import run_task
 
 app = Flask(__name__)
 

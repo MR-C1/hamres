@@ -57,11 +57,46 @@ def log(event):
 def llm(messages, max_tokens=800):
     from openai import OpenAI
 
-    client = OpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY)
+    client = OpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY, timeout=90)
     r = client.chat.completions.create(
         model=LLM_MODEL, messages=messages, max_tokens=max_tokens
     )
     return r.choices[0].message.content.strip()
+
+
+def diagnose():
+    """Step-by-step LLM connection test — sends the exact error to your chat."""
+    lines = [
+        f"base_url: {LLM_BASE_URL or '(NOT SET)'}",
+        f"model: {LLM_MODEL or '(NOT SET)'}",
+    ]
+    if not LLM_API_KEY:
+        lines.append("key: NOT SET — add LLM_API_KEY on Render")
+        return "\n".join(lines)
+    lines.append(f"key: set ({len(LLM_API_KEY)} chars, starts '{LLM_API_KEY[:7]}…')")
+
+    try:
+        from openai import OpenAI
+        lines.append("openai import: ok")
+    except Exception as e:
+        lines.append(f"openai import FAILED: {e}")
+        return "\n".join(lines)
+
+    lines.append("making test call…")
+    try:
+        client = OpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY, timeout=90)
+        r = client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[{"role": "user", "content": "Reply with the single word: ok"}],
+            max_tokens=10,
+        )
+        lines.append(f"call ok — model replied: {r.choices[0].message.content!r}")
+    except Exception as e:
+        code = getattr(e, "status_code", None)
+        head = type(e).__name__ + (f" (HTTP {code})" if code else "")
+        lines.append(f"call FAILED: {head}")
+        lines.append(f"detail: {str(e)[:600]}")
+    return "\n".join(lines)
 
 
 def web_search(query, max_results=5):
@@ -105,7 +140,8 @@ HELP = """Hermes — your agent. Commands:
 /run <name> — run a task now
 /ask <question> — research it (web + LLM)
 /status — uptime, memory, recent log
-/say <text> — chat with the LLM"""
+/say <text> — chat with the LLM
+/diag — test the LLM connection, show any error"""
 
 UNAUTHORIZED = "Not authorized. This agent answers its owner only."
 
@@ -145,9 +181,21 @@ def handle_message(msg):
         return
 
     log(f"command: {text[:60]}")
+    try:
+        dispatch(text)
+    except Exception as e:
+        # Errors belong in the owner's chat, not only the server console.
+        import traceback
 
+        traceback.print_exc()
+        tg_send(f"⚠️ Command failed: {type(e).__name__}: {e}")
+
+
+def dispatch(text):
     if text == "/help" or text == "/start":
         tg_send(HELP)
+    elif text == "/diag":
+        tg_send(diagnose())
     elif text == "/tasks":
         tg_send("\n".join(f"{name} — {t['desc']}" for name, t in TASKS.items()))
     elif text == "/status":

@@ -63,28 +63,67 @@ def _daily_briefing(ctx):
 
 
 # ---------------------------------------------------------------------------
-# Task 2: crypto price watcher (FREE — no LLM, no API key; CoinGecko)
+# Task 2: crypto price watcher (FREE — no LLM, no API keys)
+# Price comes from whichever source answers: CoinGecko → Binance → Coinbase.
+# (CoinGecko throttles cloud IPs like Render's hard, hence the fallbacks.)
 # Alert fires only when the price CROSSES your threshold, not every check.
+# Note: fallback sources quote USD — keep vs="usd".
 # ---------------------------------------------------------------------------
+
+_BINANCE_SYMBOLS = {
+    "bitcoin": "BTCUSDT", "ethereum": "ETHUSDT", "solana": "SOLUSDT",
+    "ripple": "XRPUSDT", "dogecoin": "DOGEUSDT", "binancecoin": "BNBUSDT",
+    "cardano": "ADAUSDT", "tron": "TRXUSDT", "litecoin": "LTCUSDT",
+    "polkadot": "DOTUSDT", "chainlink": "LINKUSDT", "avalanche-2": "AVAXUSDT",
+}
+
+
+def _fetch_price(coin, vs, symbol=None):
+    """Price from the first free source that answers, or raises."""
+    import requests as rq
+
+    try:
+        r = rq.get("https://api.coingecko.com/api/v3/simple/price",
+                   params={"ids": coin, "vs_currencies": vs}, timeout=15)
+        r.raise_for_status()
+        return float(r.json()[coin][vs])
+    except Exception:
+        pass  # throttled or unknown coin — try Binance
+
+    bin_sym = symbol or _BINANCE_SYMBOLS.get(coin)
+    if bin_sym:
+        try:
+            r = rq.get("https://api.binance.com/api/v3/ticker/price",
+                       params={"symbol": bin_sym}, timeout=15)
+            r.raise_for_status()
+            return float(r.json()["price"])
+        except Exception:
+            pass
+
+    cb_sym = (bin_sym or "").replace("USDT", "-USD")  # BTCUSDT → BTC-USD
+    if cb_sym.endswith("-USD"):
+        try:
+            r = rq.get(f"https://api.coinbase.com/v2/prices/{cb_sym}/spot",
+                       timeout=15)
+            r.raise_for_status()
+            return float(r.json()["data"]["amount"])
+        except Exception:
+            pass
+
+    raise RuntimeError(f"no free price source answered for '{coin}' — "
+                       f"try again in a few minutes")
+
 
 _PRICE_STATE = {}  # last seen price per coin, in memory while service runs
 
 
 def _price_watch(ctx):
-    import requests as rq
-
     coin = ctx["COIN"]          # CoinGecko id, e.g. "bitcoin", "ethereum"
     vs = ctx.get("VS", "usd")
     below = ctx.get("BELOW")    # alert when price drops below this
     above = ctx.get("ABOVE")    # alert when price rises above this
 
-    r = rq.get(
-        "https://api.coingecko.com/api/v3/simple/price",
-        params={"ids": coin, "vs_currencies": vs},
-        timeout=15,
-    )
-    r.raise_for_status()
-    price = r.json()[coin][vs]
+    price = _fetch_price(coin, vs, ctx.get("SYMBOL"))
 
     prev = _PRICE_STATE.get(coin)
     _PRICE_STATE[coin] = price

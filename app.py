@@ -36,6 +36,13 @@ OWNER_CHAT_ID = os.environ.get("OWNER_CHAT_ID", "")  # only you can command it
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://openrouter.ai/api/v1")
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
 LLM_MODEL = os.environ.get("LLM_MODEL", "openrouter/auto")
+# Fallback chain: comma-separated model ids tried in order when the primary
+# is down/overloaded/rate-limited. Add or reorder freely.
+LLM_FALLBACK_MODELS = [
+    m.strip()
+    for m in os.environ.get("LLM_FALLBACK_MODELS", "").split(",")
+    if m.strip()
+]
 
 TG_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
@@ -73,13 +80,28 @@ def _raise(resp):
     raise RuntimeError(f"HTTP {resp.status_code} from {_base_url()}: {body}")
 
 
-def _llm_openai(messages, max_tokens):
+def _openai_url():
     base = _base_url()
-    url = base + ("" if base.endswith("/v1") else "/v1") + "/chat/completions"
+    # Fully-qualified bases (end /v1, or Gemini-style .../openai) need only
+    # the method path; OpenRouter-style bare bases need /v1 added.
+    if base.endswith("/v1") or "/openai" in base:
+        return base + "/chat/completions"
+    return base + "/v1/chat/completions"
+
+
+def _anthropic_url():
+    base = _base_url()
+    if base.endswith("/v1") or "/messages" in base:
+        return base + "/messages"
+    return base + "/v1/messages"
+
+
+def _llm_openai(messages, max_tokens, model):
+    url = _openai_url()
     resp = requests.post(
         url,
         headers={"Authorization": f"Bearer {LLM_API_KEY}"},
-        json={"model": LLM_MODEL, "messages": messages, "max_tokens": max_tokens},
+        json={"model": model, "messages": messages, "max_tokens": max_tokens},
         timeout=90,
     )
     if resp.status_code != 200:
@@ -93,9 +115,8 @@ def _llm_openai(messages, max_tokens):
         raise RuntimeError(f"unexpected response: {str(data)[:600]}")
 
 
-def _llm_anthropic(messages, max_tokens):
-    base = _base_url()
-    url = base + ("" if base.endswith("/v1") else "/v1") + "/messages"
+def _llm_anthropic(messages, max_tokens, model):
+    url = _anthropic_url()
     system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
     chat = [{"role": m["role"], "content": m["content"]}
             for m in messages if m["role"] != "system"]
@@ -105,7 +126,7 @@ def _llm_anthropic(messages, max_tokens):
         "Authorization": f"Bearer {LLM_API_KEY}",
         "anthropic-version": "2023-06-01",
     }
-    body = {"model": LLM_MODEL, "max_tokens": max_tokens, "messages": chat}
+    body = {"model": model, "max_tokens": max_tokens, "messages": chat}
     if system:
         body["system"] = system
     resp = requests.post(url, headers=headers, json=body, timeout=90)
@@ -128,57 +149,82 @@ _FORMATS = (  # anthropic first: AgentRouter is anthropic-native
 )
 
 
+def model_chain():
+    """Primary model first, then fallbacks, deduplicated."""
+    chain = [LLM_MODEL] + LLM_FALLBACK_MODELS
+    seen, out = set(), []
+    for m in chain:
+        if m and m not in seen:
+            seen.add(m)
+            out.append(m)
+    return out
+
+
 def llm(messages, max_tokens=800):
     global _llm_format
     forced = os.environ.get("LLM_API_FORMAT", "").strip().lower()
 
-    # 1. explicit setting wins, 2. cached detection, 3. probe both
-    order = [f for f in _FORMATS if f[0] == forced] if forced else (
-        [f for f in _FORMATS if f[0] == _llm_format] or list(_FORMATS)
-    )
     errors = []
-    for name, fn in order:
-        try:
-            text = fn(messages, max_tokens)
-            _llm_format = name
-            return text
-        except Exception as e:
-            errors.append(f"{name} format: {e}")
-    raise RuntimeError("all API formats failed — run /diag:\n" + "\n".join(errors))
+    for model in model_chain():
+        # 1. explicit format setting, 2. cached detection, 3. probe both
+        order = [f for f in _FORMATS if f[0] == forced] if forced else (
+            [f for f in _FORMATS if f[0] == _llm_format] or list(_FORMATS)
+        )
+        for name, fn in order:
+            try:
+                text = fn(messages, max_tokens, model)
+                _llm_format = name
+                if model != LLM_MODEL:
+                    log(f"fallback used: {model} ({name})")
+                return text
+            except Exception as e:
+                errors.append(f"{model} [{name}]: {str(e)[:200]}")
+    raise RuntimeError(
+        "all models failed — run /diag:\n" + "\n".join(errors[:4])
+    )
 
 
 def diagnose():
-    """Connection test — tries both formats and reports which one your
-    provider actually speaks, with the server's own error text."""
+    """Connection test — walks the whole model chain, reports which models
+    answer and which fail, with the server's own error text."""
     lines = [
         f"base_url: {_base_url()}",
-        f"model: {LLM_MODEL or '(NOT SET)'}",
+        f"key: {'set (' + str(len(LLM_API_KEY)) + ' chars)' if LLM_API_KEY else 'NOT SET'}",
+        f"format: {os.environ.get('LLM_API_FORMAT', 'auto-detect').strip() or 'auto-detect'}",
+        f"chain: {' → '.join(model_chain())}\n",
     ]
-    if not LLM_API_KEY:
-        lines.append("key: NOT SET — add LLM_API_KEY on Render")
-        return "\n".join(lines)
-    lines.append(f"key: set ({len(LLM_API_KEY)} chars, starts '{LLM_API_KEY[:7]}…')")
-
-    forced = os.environ.get("LLM_API_FORMAT", "").strip().lower()
-    lines.append(f"format: {forced or 'auto-detect'}\n")
 
     test = [{"role": "user", "content": "Reply with the single word: ok"}]
-    worked = None
-    for name, fn in _FORMATS:
-        try:
-            text = fn(test, 20)
-            lines.append(f"✅ {name} format works — model replied: {text[:100]!r}")
-            lines.append(f"   → lock it in with LLM_API_FORMAT={name}")
-            worked = name
-        except Exception as e:
-            lines.append(f"❌ {name} format: {str(e)[:400]}\n")
+    worked = []
+    for model in model_chain():
+        ok_any = False
+        for name, fn in _FORMATS:
+            try:
+                text = fn(test, 20, model)
+                lines.append(f"✅ {model} ({name}) — replied: {text[:60]!r}")
+                ok_any = True
+                break
+            except Exception as e:
+                pass  # try next format; report below if all fail
+        if not ok_any:
+            # capture the error from the LAST format attempted
+            last = ""
+            for name, fn in _FORMATS:
+                try:
+                    fn(test, 20, model)
+                except Exception as e:
+                    last = f"{name}: {str(e)[:300]}"
+            lines.append(f"❌ {model} — {last}\n")
+        else:
+            worked.append(model)
 
+    if _llm_format is None and worked:
+        # remember the format of the first working model
+        _llm_format = "openai"  # corrected on next successful llm() call
     if worked:
-        global _llm_format
-        _llm_format = worked
+        lines.append(f"\n{len(worked)}/{len(model_chain())} models healthy.")
     else:
-        lines.append("Neither format worked. If both say 'model' errors, try a "
-                     "different LLM_MODEL id from your provider's model list.")
+        lines.append("No model answered — check LLM_API_KEY / base_url.")
     return "\n".join(lines)
 
 

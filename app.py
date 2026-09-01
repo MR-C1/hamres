@@ -14,6 +14,7 @@ Commands you send it:
 """
 
 import os
+import re
 import threading
 import time
 from datetime import datetime, timedelta
@@ -259,7 +260,12 @@ HELP = """Hermes — your agent. Commands:
 /ask <question> — research it (web + LLM)
 /status — uptime, memory, recent log
 /say <text> — chat with the LLM
-/diag — test the LLM connection, show any error"""
+/reminders — pending reminders
+/remind <when> <text> — set one (in 5m / at 18:30 / tomorrow 9am)
+/diag — test the LLM connection, show any error
+
+Or just talk: "remind me in 10m ..." sets a reminder,
+anything else gets a chat reply."""
 
 UNAUTHORIZED = "Not authorized. This agent answers its owner only."
 
@@ -334,6 +340,46 @@ def dispatch(text):
         tg_send(do_research(text[5:].strip()))
     elif text.startswith("/say "):
         tg_send(llm([{"role": "user", "content": text[5:]}]))
+    elif text == "/reminders":
+        if not REMINDERS:
+            tg_send("No pending reminders.")
+        else:
+            now = datetime.now() + BD_OFFSET
+            tg_send("\n".join(
+                f"{i+1}. {r['text']} — at {r['due']:%H:%M} "
+                f"(in {_fmt_delta((r['due'] - now).total_seconds())})"
+                for i, r in enumerate(REMINDERS)
+            ))
+    elif text.startswith("/remind"):
+        spec = text[len("/remind"):].strip()
+        m = re.match(r"^cancel\s+(\d+)$", spec, re.I)
+        if m:
+            i = int(m.group(1)) - 1
+            if 0 <= i < len(REMINDERS):
+                removed = REMINDERS.pop(i)
+                tg_send(f"Cancelled: {removed['text']}")
+            else:
+                tg_send(f"No reminder #{m.group(1)}. Use /reminders.")
+        elif not spec:
+            tg_send(REMIND_USAGE)
+        elif not add_reminder(spec):
+            tg_send(REMIND_USAGE)
+    elif not text.startswith("/"):
+        # Plain text: the human way. "remind me in 5m …" / "in 2h …" set a
+        # reminder; anything else is just chat with the LLM.
+        low = text.lower()
+        if low.startswith("remind me "):
+            spec = text[10:]
+        elif low.startswith("remind "):
+            spec = text[7:]
+        elif re.match(r"^in\s+\d", low):
+            spec = text
+        else:
+            spec = None
+        if spec is not None and not add_reminder(spec):
+            tg_send(REMIND_USAGE)
+        elif spec is None:
+            tg_send(llm([{"role": "user", "content": text}]))
     else:
         tg_send(HELP)
 
@@ -398,6 +444,118 @@ def scheduler_loop():
 
 threading.Thread(target=telegram_loop, daemon=True).start()
 threading.Thread(target=scheduler_loop, daemon=True).start()
+
+
+# ---------------------------------------------------------------------------
+# Reminders — natural language, checked every 10 seconds
+#   "remind me in 5s ..."     "in 2h take food off the stove"
+#   "remind me at 18:30 ..."  "tomorrow 9am ..."   (times are DHAKA time)
+# ---------------------------------------------------------------------------
+
+REMINDERS = []  # [{due: datetime (Dhaka wall clock), text: str}]
+
+_UNIT_SECONDS = {
+    "s": 1, "sec": 1, "secs": 1, "second": 1, "seconds": 1,
+    "m": 60, "min": 60, "mins": 60, "minute": 60, "minutes": 60,
+    "h": 3600, "hr": 3600, "hrs": 3600, "hour": 3600, "hours": 3600,
+    "d": 86400, "day": 86400, "days": 86400,
+}
+
+
+def _fmt_delta(seconds):
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f"{seconds}s"
+    m, s = divmod(seconds, 60)
+    if m < 60:
+        return f"{m}m" if not s else f"{m}m {s}s"
+    h, m = divmod(m, 60)
+    if h < 24:
+        return f"{h}h" if not m else f"{h}h {m}m"
+    d, h = divmod(h, 24)
+    return f"{d}d" if not h else f"{d}d {h}h"
+
+
+def _parse_reminder(spec):
+    """'in 5m buy eggs' / 'at 18:30 call' / 'tomorrow 9am X' →
+    (due datetime in Dhaka time, text) or None if unparseable."""
+    spec = spec.strip().strip(",").strip()
+    m = re.match(r"^in\s+(\d+(?:\.\d+)?)\s*([a-zA-Z]+)\s*(.*)$", spec, re.I)
+    if m:
+        unit = m.group(2).lower()
+        if unit in _UNIT_SECONDS:
+            due = datetime.now() + BD_OFFSET + timedelta(
+                seconds=float(m.group(1)) * _UNIT_SECONDS[unit]
+            )
+            return due, (m.group(3).strip(" ,:").strip() or "(no text)")
+    m = re.match(
+        r"^(tomorrow\s+)?(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(.*)$",
+        spec, re.I,
+    )
+    if m:
+        tomorrow, hour, minute, ap, rest = m.groups()
+        hour, minute = int(hour), int(minute or 0)
+        rest = rest.strip(" ,:").strip()
+        # avoid treating a bare number ("5") as 5am — need a real time signal
+        if not (tomorrow or ap or ":" in spec or rest):
+            return None
+        if ap:
+            ap = ap.lower()
+            if ap == "pm" and hour < 12:
+                hour += 12
+            elif ap == "am" and hour == 12:
+                hour = 0
+        if not (0 <= hour < 24 and 0 <= minute < 60):
+            return None
+        now = datetime.now() + BD_OFFSET
+        due = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if tomorrow or due <= now:  # a passed time means the next day
+            due += timedelta(days=1)
+        return due, (rest or "(no text)")
+    return None
+
+
+REMIND_USAGE = (
+    "Remind me how? 🙂 Try:\n"
+    "• remind me in 5m to check the oven\n"
+    "• in 2h call mom\n"
+    "• remind me at 18:30 to pray\n"
+    "• tomorrow 9am standup notes\n"
+    "See pending ones with /reminders, cancel with /remind cancel 2"
+)
+
+
+def add_reminder(spec, quiet=False):
+    parsed = _parse_reminder(spec)
+    if not parsed:
+        return False
+    due, rtext = parsed
+    REMINDERS.append({"due": due, "text": rtext})
+    log(f"reminder set: {rtext[:40]} @ {due:%H:%M:%S}")
+    if not quiet:
+        now = datetime.now() + BD_OFFSET
+        tg_send(
+            f"⏰ Ok — at {due:%H:%M} "
+            f"(in {_fmt_delta((due - now).total_seconds())}):\n{rtext}"
+        )
+    return True
+
+
+def reminder_loop():
+    if not (TELEGRAM_BOT_TOKEN and OWNER_CHAT_ID):
+        return
+    while True:
+        try:
+            now = datetime.now() + BD_OFFSET
+            for r in [r for r in REMINDERS if r["due"] <= now]:
+                REMINDERS.remove(r)
+                tg_send(f"⏰ Reminder: {r['text']}")
+        except Exception as e:
+            print("[reminders] loop error:", e)
+        time.sleep(10)
+
+
+threading.Thread(target=reminder_loop, daemon=True).start()
 
 
 # ---------------------------------------------------------------------------

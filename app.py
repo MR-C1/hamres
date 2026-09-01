@@ -29,6 +29,7 @@ from tasks import TASKS, build_dynamic_task
 _CODE_TASKS = frozenset(TASKS)  # tasks defined in tasks.py (not via message)
 
 from runner import run_task
+import memory
 import state
 
 app = Flask(__name__)
@@ -297,12 +298,16 @@ HELP = """Hermes — your agent. Commands:
 /say <text> — chat with the LLM
 /reminders — pending reminders
 /remind <when> <text> — set one (in 5m / at 18:30 / tomorrow 9am)
+/memories — everything I remember about you
+/forget <what> — delete a memory (or 'forget everything')
+/summarize <url> — read a link and summarize it
 /quota — LLM requests used today
 /report — today's activity summary (what ran, what failed)
 /kill <name> — stop a task created by message
 /diag — test the LLM connection, show any error
 
 Or just talk, e.g.:
+"remember my wifi password is xyz" → "what's my wifi password?"
 "remind me in 10m ..." / "alert me when bitcoin drops below 60000"
 "tell me ethereum's price every 30m" / "weather in 6 hours"
 "watch @SamayRainaOfficial for new videos"
@@ -486,6 +491,91 @@ def _apply_schedule_to_spec(spec, sched):
         raise ValueError("schedule must be every_minutes or daily")
 
 
+# ---------------------------------------------------------------------------
+# Link reader — paste a URL, get a clean summary (1 LLM request per link)
+# ---------------------------------------------------------------------------
+
+_URL_RE = re.compile(r"https?://\S+")
+
+# words that mean the URL is part of a task-creation request, not a
+# "read this for me" request
+_TASK_WORDS = re.compile(
+    r"\b(watch|monitor|alert|every|remind|briefing|daily|check|"
+    r"minute|hour|video|subscribe|follow)\b", re.I)
+
+
+def _extract_text(html):
+    """HTML → readable-ish text, stdlib only."""
+    from html.parser import HTMLParser
+
+    class _T(HTMLParser):
+        SKIP = {"script", "style", "noscript", "head", "svg"}
+
+        def __init__(self):
+            super().__init__()
+            self.parts = []
+            self._skip = 0
+
+        def handle_starttag(self, tag, attrs):
+            if tag in self.SKIP:
+                self._skip += 1
+
+        def handle_endtag(self, tag):
+            if tag in self.SKIP and self._skip:
+                self._skip -= 1
+
+        def handle_data(self, data):
+            if not self._skip and data.strip():
+                self.parts.append(data.strip())
+
+    p = _T()
+    p.feed(html)
+    return " ".join(p.parts)
+
+
+def _summarize_url(url):
+    if not url.startswith("http"):
+        tg_send("Send a link that starts with http(s)://")
+        return
+    tg_send(f"🔎 Reading {url}…")
+    try:
+        r = requests.get(
+            url, timeout=20, headers={"User-Agent": "Mozilla/5.0"},
+            stream=True,
+        )
+        r.raise_for_status()
+        chunks, size = [], 0
+        for chunk in r.iter_content(chunk_size=64 * 1024):
+            chunks.append(chunk)
+            size += len(chunk)
+            if size >= 900 * 1024:  # ~1MB is plenty for text
+                break
+        html = b"".join(chunks).decode("utf-8", "ignore")
+    except Exception as e:
+        tg_send(f"Couldn't fetch that page: {e}")
+        return
+
+    page = _extract_text(html)[:6000]
+    if len(page) < 200:
+        tg_send("That page has barely any text (a login wall or a pure "
+                "app page?) — nothing to summarize.")
+        return
+    try:
+        summary = llm(
+            [
+                {"role": "system",
+                 "content": "Summarize this web page for the user in 5-10 "
+                 "short bullet points. Lead with what the page is. "
+                 "Bangla/Banglish pages: answer in the same style."},
+                {"role": "user", "content": f"URL: {url}\n\n{page}"},
+            ],
+            max_tokens=500,
+        )
+        tg_send(f"📄 {summary}")
+    except Exception as e:
+        tg_send(f"Read the page but summarizing failed: {e}")
+
+
 def handle_plain_text(text):
     """Plain messages: pending confirmation first (free), then ONE LLM call
     that decides: create task(s), set a reminder, or just chat."""
@@ -509,11 +599,22 @@ def handle_plain_text(text):
             return
         # any other text: forget the question, classify the new message
 
+    # -- link reader: a message that's basically just a URL --
+    m = _URL_RE.search(text)
+    if m and not _TASK_WORDS.search(text):
+        _summarize_url(m.group(0))
+        return
+
     now = datetime.now() + BD_OFFSET
+    # -- memory injection: relevant stored facts join the prompt. Costs 0
+    # extra requests (quota counts requests, not prompt length). --
+    sys_prompt = INTENT_SYSTEM.replace("{NOW}", f"{now:%Y-%m-%d %H:%M}")
+    mem_block = memory.inject_for(text)
+    if mem_block:
+        sys_prompt += "\n\n" + mem_block
     raw = llm(
         [
-            {"role": "system",
-             "content": INTENT_SYSTEM.replace("{NOW}", f"{now:%Y-%m-%d %H:%M}")},
+            {"role": "system", "content": sys_prompt},
             {"role": "user", "content": text},
         ],
         max_tokens=500,
@@ -674,8 +775,10 @@ def dispatch(text):
         up = int(time.time() - STARTED_AT)
         mem = psutil.Process().memory_info().rss // (1024 * 1024)
         mode = "gist-backed" if state.GIST_TOKEN else "memory-only"
+        nmem = len(state.STATE.get("memories", []))
         tg_send(
-            f"Up {up // 3600}h {(up % 3600) // 60}m, {mem}MB RAM, state: {mode}\n"
+            f"Up {up // 3600}h {(up % 3600) // 60}m, {mem}MB RAM, "
+            f"state: {mode}, {nmem} memories\n"
             + "\n".join(LOG[-10:])
         )
     elif text.startswith("/run "):
@@ -705,6 +808,12 @@ def dispatch(text):
             tg_send(_stop_dyn_task(name))
     elif text == "/report":
         _run_task_safely("daily_report")  # sends the summary itself
+    elif text == "/memories":
+        tg_send(memory.recent(15))
+    elif text.startswith("/forget "):
+        tg_send(memory.forget(text[8:].strip()))
+    elif text.startswith("/summarize "):
+        _summarize_url(text[11:].strip())
     elif text == "/reminders":
         if not REMINDERS:
             tg_send("No pending reminders.")
@@ -731,9 +840,30 @@ def dispatch(text):
         elif not add_reminder(spec):
             tg_send(REMIND_USAGE)
     elif not text.startswith("/"):
-        # Plain text: the human way. "remind me in 5m …" / "in 2h …" set a
-        # reminder; anything else is just chat with the LLM.
+        # Plain text: the human way. "remember …" stores a fact, "remind
+        # me in 5m …" sets a reminder — both free, no LLM. Everything
+        # else goes to the intent router (or the link reader).
         low = text.lower()
+
+        m = re.match(r"^remember\s+(?:that\s+)?(.+)$", low)
+        if m:
+            tg_send(memory.remember(text[m.start(1):]))  # original case
+            return
+
+        m = (re.match(r"^what's?\s+my\s+(.+)$", low)
+             or re.match(r"^what\s+do\s+you\s+remember(?:\s+about\s+(.+))?$", low)
+             or re.match(r"^what\s+did\s+i\s+(?:tell\s+you|say)\s+about\s+(.+)$", low)
+             or re.match(r"^do\s+you\s+remember\s+(.+)$", low))
+        if m:
+            query = m.group(1) or text
+            tg_send(memory.recall(query))
+            return
+
+        m = re.match(r"^forget\s+(.+)$", low)
+        if m:
+            tg_send(memory.forget(m.group(1)))
+            return
+
         if low.startswith("remind me "):
             spec = text[10:]
         elif low.startswith("remind "):

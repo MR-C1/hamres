@@ -42,6 +42,22 @@ Environment tab:
 - `BRIEFING_TOPIC` = whatever you want the daily briefing about
 - `GIST_TOKEN` = GitHub token with gist read/write — see Persistence
 
+## Memory (free — 0 LLM requests)
+"remember my wifi password is xyz" → stored in the gist, survives
+restarts. "what's my wifi password?" / "what do you remember about X" →
+recalled, free. `/memories` lists, `/forget <what>` deletes (or
+"forget everything"). Relevant memories are also injected into normal
+chat replies automatically — still 1 request per message.
+⚠️ Memories are plain text in a secret gist on GitHub — fine for
+low-stakes facts, NOT a password vault. Real passwords belong in a
+password manager.
+
+## Link reader (1 request per link)
+Paste any URL (or `/summarize <url>`) → the server fetches and reads it,
+you get a 5-10 bullet summary. Saves you mobile data on heavy pages.
+A URL inside a task request ("watch https://… every 10m") still creates
+the task — it won't be hijacked into a summary.
+
 ## Persistence (survives restarts, ~5 min, no card)
 Without it, every restart/deploy wipes reminders, tasks created by
 message, and price baselines. With it, all of that is saved to a secret

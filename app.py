@@ -16,7 +16,7 @@ Commands you send it:
 import os
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import psutil
 import requests
@@ -362,22 +362,37 @@ def telegram_loop():
             time.sleep(5)
 
 
+def _run_task_safely(name):
+    try:
+        run_task(name)
+    except Exception as e:
+        import traceback
+
+        traceback.print_exc()
+        tg_send(f"⚠️ Task '{name}' failed: {e}")
+
+
+BD_OFFSET = timedelta(hours=6)  # Bangladesh is UTC+6
+
+
 def scheduler_loop():
-    """Every minute, run any task whose schedule says it's due."""
+    """Every minute, run any task whose schedule says it's due.
+    Schedules are written in DHAKA time — Render's clock is UTC, so we
+    shift before checking. Each task runs in its own thread so a slow
+    one can't delay the others."""
     if not (TELEGRAM_BOT_TOKEN and OWNER_CHAT_ID):
         return
     last_run = {}
     while True:
-        now = datetime.now()
+        now = datetime.now() + BD_OFFSET  # Dhaka local time
         for name, t in TASKS.items():
             due = t["schedule"](now)
             if due and now.strftime("%H:%M") != last_run.get(name):
                 last_run[name] = now.strftime("%H:%M")
                 log(f"scheduled run: {name}")
-                try:
-                    run_task(name)
-                except Exception as e:
-                    tg_send(f"Task '{name}' failed: {e}")
+                threading.Thread(
+                    target=_run_task_safely, args=(name,), daemon=True
+                ).start()
         time.sleep(60)
 
 

@@ -23,6 +23,8 @@ and plain requests.get() are free — run those as often as you like.
 import os
 from datetime import datetime
 
+import state
+
 
 def _never(now):
     return False
@@ -114,9 +116,6 @@ def _fetch_price(coin, vs, symbol=None):
                        f"try again in a few minutes")
 
 
-_PRICE_STATE = {}  # last seen price per coin, in memory while service runs
-
-
 def _price_watch(ctx):
     coin = ctx["COIN"]          # CoinGecko id, e.g. "bitcoin", "ethereum"
     vs = ctx.get("VS", "usd")
@@ -125,8 +124,10 @@ def _price_watch(ctx):
 
     price = _fetch_price(coin, vs, ctx.get("SYMBOL"))
 
-    prev = _PRICE_STATE.get(coin)
-    _PRICE_STATE[coin] = price
+    prices = state.STATE.setdefault("prices", {})
+    prev = prices.get(coin)
+    prices[coin] = price
+    state.save_soon()  # baseline survives restarts via the gist
 
     if prev is None:  # first check just records the price
         ctx["log"](f"{coin} = {price} {vs.upper()} (recorded, watching)")
@@ -154,15 +155,12 @@ def _watch_page(ctx):
     body = requests.get(url, timeout=15).text
     digest = hashlib.md5(body.encode()).hexdigest()
 
-    # Render's disk is ephemeral, so state only survives while the service
-    # runs — a change alerts once per deploy. Good enough to start.
-    state_file = "/tmp/" + hashlib.md5(url.encode()).hexdigest()[:8]
-    try:
-        old = open(state_file).read().strip()
-    except FileNotFoundError:
-        old = None
-    with open(state_file, "w") as f:
-        f.write(digest)
+    # hashes live in the gist-backed state, so a restart doesn't forget
+    # what the page looked like (no false "changed!" alert)
+    hashes = state.STATE.setdefault("page_hashes", {})
+    old = hashes.get(url)
+    hashes[url] = digest
+    state.save_soon()
 
     if old and old != digest:
         ctx["tg_send"](f"👁 Page changed: {url}")
@@ -174,6 +172,85 @@ def _watch_page(ctx):
 
 def _remind(ctx):
     ctx["tg_send"](f"⏰ Reminder: {ctx['MESSAGE']}")
+
+
+# ---------------------------------------------------------------------------
+# Dynamic tasks — created at runtime from parsed user messages.
+# The LLM may only choose from these templates and fill in parameters;
+# it can never inject code. Tasks appear in /tasks and /run immediately.
+# NOTE: in-memory only — a restart/deploy resets them (code tasks survive).
+# ---------------------------------------------------------------------------
+
+def dyn_task_name(spec):
+    """The deterministic name build_dynamic_task would give this spec,
+    WITHOUT registering anything — safe for lookups/comparisons."""
+    ttype = (spec or {}).get("type", "")
+    params = spec.get("params") or {}
+    if ttype == "price_alert":
+        return f"alert_{str(params.get('coin') or 'bitcoin').lower().strip()}"
+    if ttype == "briefing":
+        hour = int(params.get("hour") if params.get("hour") is not None else 9)
+        minute = int(params.get("minute") or 0)
+        return f"briefing_{hour:02d}{minute:02d}"
+    if ttype == "watch_page":
+        return f"watch_{abs(hash(str(params.get('url')))) % 10000}"
+    return None
+
+
+def build_dynamic_task(spec):
+    """spec example: {"type":"price_alert","params":{"coin":"bitcoin",
+    "below":60000,"every_minutes":30}} → registers into TASKS, returns name."""
+    ttype = (spec or {}).get("type", "")
+    params = spec.get("params") or {}
+
+    if ttype == "price_alert":
+        coin = str(params.get("coin") or "bitcoin").lower().strip()
+        below = params.get("below")
+        above = params.get("above")
+        every = max(5, int(params.get("every_minutes") or 30))
+        if below is None and above is None:
+            raise ValueError("need 'below' or 'above' (USD)")
+        base = f"alert_{coin}"
+        TASKS[base] = {
+            "desc": f"Alert when {coin} crosses "
+                    + (f"< ${below}" if below else f"> ${above}"),
+            "schedule": _every(every / 60),
+            "run": _price_watch,
+            "ctx": {"COIN": coin, "BELOW": below, "ABOVE": above},
+        }
+        return base
+
+    if ttype == "briefing":
+        topic = str(params.get("topic") or "today's top news").strip()
+        hour = int(params.get("hour") if params.get("hour") is not None else 9)
+        minute = int(params.get("minute") or 0)
+        if not (0 <= hour < 24 and 0 <= minute < 60):
+            raise ValueError("hour/minute out of range")
+        base = f"briefing_{hour:02d}{minute:02d}"
+        TASKS[base] = {
+            "desc": f"Daily briefing on '{topic}' at {hour:02d}:{minute:02d} Dhaka",
+            "schedule": _daily(hour, minute),
+            "run": _daily_briefing,
+            "ctx": {"TOPIC": topic},
+        }
+        return base
+
+    if ttype == "watch_page":
+        url = str(params.get("url") or "").strip()
+        every = max(5, int(params.get("every_minutes") or 60))
+        if not url.startswith("http"):
+            raise ValueError("url must start with http")
+        base = f"watch_{abs(hash(url)) % 10000}"
+        TASKS[base] = {
+            "desc": f"Watch {url} every {every}m, ping on change",
+            "schedule": _every(every / 60),
+            "run": _watch_page,
+            "ctx": {"URL": url},
+        }
+        return base
+
+    raise ValueError(f"unknown task type '{ttype}' (use price_alert, "
+                     "briefing, or watch_page)")
 
 
 TASKS = {

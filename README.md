@@ -33,10 +33,26 @@ New → Web Service → connect repo. Verify **Plan: Free**, start command
 Environment tab:
 - `TELEGRAM_BOT_TOKEN` = bot token
 - `OWNER_CHAT_ID` = your numeric id from step 2
-- `LLM_API_KEY` = your OpenRouter/AgentRouter key
+- `LLM_API_KEY` = your OpenRouter key
 - `LLM_BASE_URL` = `https://openrouter.ai/api/v1`
-- `LLM_MODEL` = model id
+- `LLM_MODEL` = primary model, e.g. `z-ai/glm-5.2:free`
+- `LLM_FALLBACK_MODELS` = comma-separated backups, e.g.
+  `minimax/minimax-m3:free,thinkingmachines/inkling:free,openrouter/free`
+- `LLM_API_FORMAT` = `openai` (skips the format probe)
 - `BRIEFING_TOPIC` = whatever you want the daily briefing about
+- `GIST_TOKEN` = GitHub token with gist read/write — see Persistence
+
+## Persistence (survives restarts, ~5 min, no card)
+Without it, every restart/deploy wipes reminders, tasks created by
+message, and price baselines. With it, all of that is saved to a secret
+gist on your GitHub account and restored on boot.
+1. GitHub → profile → Settings → Developer settings → Personal access
+   tokens → fine-grained → Generate: permission **Account → Gists →
+   Read and write**. (Or classic token with the `gist` scope.)
+2. Render → Environment → add `GIST_TOKEN` = that token.
+3. Done — the gist is created automatically on first save.
+Missed reminders fire on next boot; `/status` shows `state: gist-backed`.
+Note: fine-grained tokens expire — set the bot a reminder to rotate it.
 
 ### 5. Keep awake — UptimeRobot (free, no card)
 HTTP(s) monitor, every 5 min, `https://your-service.onrender.com/health`.

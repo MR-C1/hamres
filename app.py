@@ -13,6 +13,7 @@ Commands you send it:
   /say <text>    — plain chat with the LLM
 """
 
+import json
 import os
 import re
 import threading
@@ -23,8 +24,12 @@ import psutil
 import requests
 from flask import Flask
 
-from tasks import TASKS
+from tasks import TASKS, build_dynamic_task
+
+_CODE_TASKS = frozenset(TASKS)  # tasks defined in tasks.py (not via message)
+
 from runner import run_task
+import state
 
 app = Flask(__name__)
 
@@ -161,6 +166,32 @@ def model_chain():
     return out
 
 
+DAILY_FREE_LIMIT = 50  # OpenRouter free tier; see /quota
+
+
+def _today():
+    return datetime.now().strftime("%Y-%m-%d")  # UTC day, matching OR's reset
+
+
+def _count_request():
+    """Track LLM requests per day in state so it survives restarts."""
+    q = state.STATE.setdefault("quota", {"day": _today(), "used": 0})
+    if q["day"] != _today():  # new day — reset counter
+        q["day"] = _today()
+        q["used"] = 0
+    q["used"] += 1
+    state.save_soon()
+    return q["used"]
+
+
+def _quota_report():
+    q = state.STATE.setdefault("quota", {"day": _today(), "used": 0})
+    if q["day"] != _today():
+        q["day"] = _today()
+        q["used"] = 0
+    return q
+
+
 def llm(messages, max_tokens=800):
     global _llm_format
     forced = os.environ.get("LLM_API_FORMAT", "").strip().lower()
@@ -175,6 +206,10 @@ def llm(messages, max_tokens=800):
             try:
                 text = fn(messages, max_tokens, model)
                 _llm_format = name
+                used = _count_request()
+                if used == DAILY_FREE_LIMIT - 5:  # warn once near the cap
+                    tg_send(f"⚠️ Free-tier budget almost gone: "
+                            f"{used}/{DAILY_FREE_LIMIT} requests today.")
                 if model != LLM_MODEL:
                     log(f"fallback used: {model} ({name})")
                 return text
@@ -262,10 +297,13 @@ HELP = """Hermes — your agent. Commands:
 /say <text> — chat with the LLM
 /reminders — pending reminders
 /remind <when> <text> — set one (in 5m / at 18:30 / tomorrow 9am)
+/quota — LLM requests used today
+/kill <name> — stop a task created by message
 /diag — test the LLM connection, show any error
 
-Or just talk: "remind me in 10m ..." sets a reminder,
-anything else gets a chat reply."""
+Or just talk: "remind me in 10m ..." sets a reminder, and
+"alert me when bitcoin drops below 60000" / "every day 8am
+brief me on cricket" CREATE automations from your message."""
 
 UNAUTHORIZED = "Not authorized. This agent answers its owner only."
 
@@ -297,6 +335,85 @@ def do_research(question):
     )
 
 
+# ---------------------------------------------------------------------------
+# Natural-language task creation — ONE LLM request classifies + replies
+# ---------------------------------------------------------------------------
+
+INTENT_SYSTEM = """You are Hermes, the intent router for a personal Telegram agent.
+Current local time: {NOW} (Dhaka, UTC+6).
+The user sends a message. Decide what to do and reply with a SINGLE JSON
+object only — no markdown fences, no commentary.
+
+Automations you may create (fill params from the user's words):
+- Crypto price alert: {"action":"task","type":"price_alert","params":{"coin":"<coingecko id, e.g. bitcoin, ethereum, solana>","below":<USD number or null>,"above":<USD number or null>,"every_minutes":<int, default 30>}}
+- Daily briefing: {"action":"task","type":"briefing","params":{"topic":"<topic>","hour":<0-23>,"minute":<0-59>}}
+- Page change watch: {"action":"task","type":"watch_page","params":{"url":"https://...","every_minutes":<int, default 60>}}
+- One-time reminder: {"action":"reminder","when_spec":"<in 10m | in 2h | at 18:30 | tomorrow 9am>","text":"<what to remember>"}
+
+For everything else — greetings, questions, chat:
+- {"action":"chat","reply":"<your reply, 1-3 sentences>"}
+
+Rules: prices are USD. If the user asks for an automation you cannot build
+from the list above, use "chat" and briefly mention what you can automate
+(price alerts, briefings, page watches, reminders). Keep chat replies short."""
+
+
+def _extract_json(raw):
+    """Pull the first JSON object out of an LLM reply, tolerating fences."""
+    raw = (raw or "").strip()
+    raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.S).strip()
+    start, end = raw.find("{"), raw.rfind("}")
+    if start == -1 or end == -1:
+        return None
+    try:
+        return json.loads(raw[start : end + 1])
+    except Exception:
+        return None
+
+
+def handle_plain_text(text):
+    """One LLM call decides: create a task, set a reminder, or just chat."""
+    now = datetime.now() + BD_OFFSET
+    raw = llm(
+        [
+            {"role": "system",
+             "content": INTENT_SYSTEM.replace("{NOW}", f"{now:%Y-%m-%d %H:%M}")},
+            {"role": "user", "content": text},
+        ],
+        max_tokens=400,
+    )
+    data = _extract_json(raw)
+
+    if not data:  # model didn't produce JSON — treat its text as a chat reply
+        tg_send(raw or "…")
+        return
+
+    action = data.get("action")
+
+    if action == "task":
+        try:
+            name = build_dynamic_task(data)
+            # remember the recipe so it can be rebuilt after a restart
+            state.STATE.setdefault("dynamic_tasks", []).append(
+                {"type": data.get("type"), "params": data.get("params") or {}}
+            )
+            state.save_soon()
+            t = TASKS[name]
+            tg_send(
+                f"✅ Task created: {t['desc']}\n"
+                f"Saved — it survives restarts. Test it now with /run {name}"
+            )
+            log(f"dynamic task: {name}")
+        except Exception as e:
+            tg_send(f"Couldn't build that task: {e}")
+    elif action == "reminder":
+        spec = f"{data.get('when_spec', '')} {data.get('text', '')}".strip()
+        if not add_reminder(spec):
+            tg_send(REMIND_USAGE)
+    else:  # chat
+        tg_send(data.get("reply") or raw or "…")
+
+
 def handle_message(msg):
     text = (msg.get("text") or "").strip()
     if not text or not is_owner(msg):
@@ -325,8 +442,9 @@ def dispatch(text):
     elif text == "/status":
         up = int(time.time() - STARTED_AT)
         mem = psutil.Process().memory_info().rss // (1024 * 1024)
+        mode = "gist-backed" if state.GIST_TOKEN else "memory-only"
         tg_send(
-            f"Up {up // 3600}h {(up % 3600) // 60}m, {mem}MB RAM\n"
+            f"Up {up // 3600}h {(up % 3600) // 60}m, {mem}MB RAM, state: {mode}\n"
             + "\n".join(LOG[-10:])
         )
     elif text.startswith("/run "):
@@ -340,6 +458,32 @@ def dispatch(text):
         tg_send(do_research(text[5:].strip()))
     elif text.startswith("/say "):
         tg_send(llm([{"role": "user", "content": text[5:]}]))
+    elif text == "/quota":
+        q = _quota_report()
+        reset = "midnight UTC (6am Dhaka)"
+        tg_send(f"LLM requests today: {q['used']}/{DAILY_FREE_LIMIT}\n"
+                f"Resets at {reset}. Reminders and free tasks "
+                f"(price/page watches) don't count.")
+    elif text.startswith("/kill "):
+        name = text[6:].strip()
+        if name not in TASKS:
+            tg_send(f"No task '{name}'. Use /tasks.")
+        elif name in _CODE_TASKS:  # written in tasks.py — remove from there
+            tg_send(f"'{name}' is code-defined — delete it from tasks.py "
+                    f"to stop it permanently.")
+        else:
+            t = TASKS.pop(name)
+            # drop from saved state so restarts don't revive it. Names are
+            # deterministic, so compute each spec's name and compare.
+            from tasks import dyn_task_name
+
+            state.STATE["dynamic_tasks"] = [
+                s for s in state.STATE.get("dynamic_tasks", [])
+                if dyn_task_name(s) != name
+            ]
+            state.save_soon()
+            log(f"task killed: {name}")
+            tg_send(f"🗑 Killed: {t['desc']}")
     elif text == "/reminders":
         if not REMINDERS:
             tg_send("No pending reminders.")
@@ -357,6 +501,7 @@ def dispatch(text):
             i = int(m.group(1)) - 1
             if 0 <= i < len(REMINDERS):
                 removed = REMINDERS.pop(i)
+                _sync_reminders_state()
                 tg_send(f"Cancelled: {removed['text']}")
             else:
                 tg_send(f"No reminder #{m.group(1)}. Use /reminders.")
@@ -379,7 +524,7 @@ def dispatch(text):
         if spec is not None and not add_reminder(spec):
             tg_send(REMIND_USAGE)
         elif spec is None:
-            tg_send(llm([{"role": "user", "content": text}]))
+            handle_plain_text(text)
     else:
         tg_send(HELP)
 
@@ -442,8 +587,29 @@ def scheduler_loop():
         time.sleep(60)
 
 
-threading.Thread(target=telegram_loop, daemon=True).start()
-threading.Thread(target=scheduler_loop, daemon=True).start()
+def _restore_state():
+    """Load gist state and rebuild reminders + tasks created by message.
+    Runs in a thread so a slow GitHub call never delays boot; without a
+    GIST_TOKEN it's a no-op."""
+    state.load()
+    for item in state.STATE.get("reminders", []):
+        try:
+            REMINDERS.append(
+                {"due": datetime.fromisoformat(item["due"]), "text": item["text"]}
+            )
+        except Exception:
+            pass  # malformed entry — skip it
+    for spec in state.STATE.get("dynamic_tasks", []):
+        try:
+            build_dynamic_task(spec)
+        except Exception as e:
+            print("[state] task rebuild failed:", e)
+    if REMINDERS or state.STATE.get("dynamic_tasks"):
+        log(
+            f"state restored: {len(REMINDERS)} reminders, "
+            f"{len(state.STATE.get('dynamic_tasks', []))} tasks"
+        )
+        state.save_soon()
 
 
 # ---------------------------------------------------------------------------
@@ -525,12 +691,20 @@ REMIND_USAGE = (
 )
 
 
+def _sync_reminders_state():
+    state.STATE["reminders"] = [
+        {"due": r["due"].isoformat(), "text": r["text"]} for r in REMINDERS
+    ]
+    state.save_soon()
+
+
 def add_reminder(spec, quiet=False):
     parsed = _parse_reminder(spec)
     if not parsed:
         return False
     due, rtext = parsed
     REMINDERS.append({"due": due, "text": rtext})
+    _sync_reminders_state()
     log(f"reminder set: {rtext[:40]} @ {due:%H:%M:%S}")
     if not quiet:
         now = datetime.now() + BD_OFFSET
@@ -549,13 +723,26 @@ def reminder_loop():
             now = datetime.now() + BD_OFFSET
             for r in [r for r in REMINDERS if r["due"] <= now]:
                 REMINDERS.remove(r)
+                _sync_reminders_state()
                 tg_send(f"⏰ Reminder: {r['text']}")
         except Exception as e:
             print("[reminders] loop error:", e)
         time.sleep(10)
 
 
+# (reminder_loop is started with all other threads at the bottom of the file)
+
+
+# ---------------------------------------------------------------------------
+# Start every background loop LAST, after all definitions, so no thread can
+# race a half-initialized module.
+# ---------------------------------------------------------------------------
+
+threading.Thread(target=_restore_state, daemon=True).start()
+threading.Thread(target=telegram_loop, daemon=True).start()
+threading.Thread(target=scheduler_loop, daemon=True).start()
 threading.Thread(target=reminder_loop, daemon=True).start()
+threading.Thread(target=state.saver_loop, daemon=True).start()
 
 
 # ---------------------------------------------------------------------------

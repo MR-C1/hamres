@@ -197,30 +197,19 @@ def diagnose():
     test = [{"role": "user", "content": "Reply with the single word: ok"}]
     worked = []
     for model in model_chain():
-        ok_any = False
+        last_err = ""
         for name, fn in _FORMATS:
             try:
                 text = fn(test, 20, model)
                 lines.append(f"✅ {model} ({name}) — replied: {text[:60]!r}")
-                ok_any = True
+                worked.append(model)
                 break
             except Exception as e:
-                pass  # try next format; report below if all fail
-        if not ok_any:
-            # capture the error from the LAST format attempted
-            last = ""
-            for name, fn in _FORMATS:
-                try:
-                    fn(test, 20, model)
-                except Exception as e:
-                    last = f"{name}: {str(e)[:300]}"
-            lines.append(f"❌ {model} — {last}\n")
+                last_err = f"{name}: {str(e)[:300]}"
         else:
-            worked.append(model)
+            # no format worked for this model — report the last error seen
+            lines.append(f"❌ {model} — {last_err}\n")
 
-    if _llm_format is None and worked:
-        # remember the format of the first working model
-        _llm_format = "openai"  # corrected on next successful llm() call
     if worked:
         lines.append(f"\n{len(worked)}/{len(model_chain())} models healthy.")
     else:

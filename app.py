@@ -54,20 +54,104 @@ def log(event):
 # LLM + web search helpers (used by tasks and /ask)
 # ---------------------------------------------------------------------------
 
-def llm(messages, max_tokens=800):
-    from openai import OpenAI
+# ---------------------------------------------------------------------------
+# LLM layer — speaks BOTH provider formats and auto-detects which one works.
+#   openai format    : POST {base}/v1/chat/completions   (OpenRouter etc.)
+#   anthropic format : POST {base}/v1/messages           (AgentRouter etc.)
+# Raw requests (no SDK) so failures show the server's own error text.
+# ---------------------------------------------------------------------------
 
-    client = OpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY, timeout=90)
-    r = client.chat.completions.create(
-        model=LLM_MODEL, messages=messages, max_tokens=max_tokens
+_llm_format = None  # cached auto-detected format: "openai" | "anthropic"
+
+
+def _base_url():
+    return (LLM_BASE_URL or "https://openrouter.ai/api/v1").rstrip("/")
+
+
+def _raise(resp):
+    body = resp.text[:600]
+    raise RuntimeError(f"HTTP {resp.status_code} from {_base_url()}: {body}")
+
+
+def _llm_openai(messages, max_tokens):
+    base = _base_url()
+    url = base + ("" if base.endswith("/v1") else "/v1") + "/chat/completions"
+    resp = requests.post(
+        url,
+        headers={"Authorization": f"Bearer {LLM_API_KEY}"},
+        json={"model": LLM_MODEL, "messages": messages, "max_tokens": max_tokens},
+        timeout=90,
     )
-    return r.choices[0].message.content.strip()
+    if resp.status_code != 200:
+        _raise(resp)
+    data = resp.json()
+    if "error" in data:
+        raise RuntimeError(f"provider error: {str(data['error'])[:600]}")
+    try:
+        return data["choices"][0]["message"]["content"].strip()
+    except (KeyError, IndexError, TypeError):
+        raise RuntimeError(f"unexpected response: {str(data)[:600]}")
+
+
+def _llm_anthropic(messages, max_tokens):
+    base = _base_url()
+    url = base + ("" if base.endswith("/v1") else "/v1") + "/messages"
+    system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
+    chat = [{"role": m["role"], "content": m["content"]}
+            for m in messages if m["role"] != "system"]
+    # Send both auth headers: proxies accept either.
+    headers = {
+        "x-api-key": LLM_API_KEY,
+        "Authorization": f"Bearer {LLM_API_KEY}",
+        "anthropic-version": "2023-06-01",
+    }
+    body = {"model": LLM_MODEL, "max_tokens": max_tokens, "messages": chat}
+    if system:
+        body["system"] = system
+    resp = requests.post(url, headers=headers, json=body, timeout=90)
+    if resp.status_code != 200:
+        _raise(resp)
+    data = resp.json()
+    if "error" in data:
+        raise RuntimeError(f"provider error: {str(data['error'])[:600]}")
+    text = "".join(
+        b.get("text", "") for b in data.get("content", []) if isinstance(b, dict)
+    ).strip()
+    if not text:
+        raise RuntimeError(f"unexpected response: {str(data)[:600]}")
+    return text
+
+
+_FORMATS = (  # anthropic first: AgentRouter is anthropic-native
+    ("anthropic", _llm_anthropic),
+    ("openai", _llm_openai),
+)
+
+
+def llm(messages, max_tokens=800):
+    global _llm_format
+    forced = os.environ.get("LLM_API_FORMAT", "").strip().lower()
+
+    # 1. explicit setting wins, 2. cached detection, 3. probe both
+    order = [f for f in _FORMATS if f[0] == forced] if forced else (
+        [f for f in _FORMATS if f[0] == _llm_format] or list(_FORMATS)
+    )
+    errors = []
+    for name, fn in order:
+        try:
+            text = fn(messages, max_tokens)
+            _llm_format = name
+            return text
+        except Exception as e:
+            errors.append(f"{name} format: {e}")
+    raise RuntimeError("all API formats failed — run /diag:\n" + "\n".join(errors))
 
 
 def diagnose():
-    """Step-by-step LLM connection test — sends the exact error to your chat."""
+    """Connection test — tries both formats and reports which one your
+    provider actually speaks, with the server's own error text."""
     lines = [
-        f"base_url: {LLM_BASE_URL or '(NOT SET)'}",
+        f"base_url: {_base_url()}",
         f"model: {LLM_MODEL or '(NOT SET)'}",
     ]
     if not LLM_API_KEY:
@@ -75,27 +159,26 @@ def diagnose():
         return "\n".join(lines)
     lines.append(f"key: set ({len(LLM_API_KEY)} chars, starts '{LLM_API_KEY[:7]}…')")
 
-    try:
-        from openai import OpenAI
-        lines.append("openai import: ok")
-    except Exception as e:
-        lines.append(f"openai import FAILED: {e}")
-        return "\n".join(lines)
+    forced = os.environ.get("LLM_API_FORMAT", "").strip().lower()
+    lines.append(f"format: {forced or 'auto-detect'}\n")
 
-    lines.append("making test call…")
-    try:
-        client = OpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY, timeout=90)
-        r = client.chat.completions.create(
-            model=LLM_MODEL,
-            messages=[{"role": "user", "content": "Reply with the single word: ok"}],
-            max_tokens=10,
-        )
-        lines.append(f"call ok — model replied: {r.choices[0].message.content!r}")
-    except Exception as e:
-        code = getattr(e, "status_code", None)
-        head = type(e).__name__ + (f" (HTTP {code})" if code else "")
-        lines.append(f"call FAILED: {head}")
-        lines.append(f"detail: {str(e)[:600]}")
+    test = [{"role": "user", "content": "Reply with the single word: ok"}]
+    worked = None
+    for name, fn in _FORMATS:
+        try:
+            text = fn(test, 20)
+            lines.append(f"✅ {name} format works — model replied: {text[:100]!r}")
+            lines.append(f"   → lock it in with LLM_API_FORMAT={name}")
+            worked = name
+        except Exception as e:
+            lines.append(f"❌ {name} format: {str(e)[:400]}\n")
+
+    if worked:
+        global _llm_format
+        _llm_format = worked
+    else:
+        lines.append("Neither format worked. If both say 'model' errors, try a "
+                     "different LLM_MODEL id from your provider's model list.")
     return "\n".join(lines)
 
 

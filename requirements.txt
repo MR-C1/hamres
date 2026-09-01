@@ -1,6 +1,5 @@
 flask
 gunicorn
-openai
 requests
 psutil
 ddgs

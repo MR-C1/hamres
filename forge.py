@@ -28,8 +28,14 @@ SKILL_SYSTEM = """You write ONE Python function for a personal automation bot.
 def task(ctx):
     ...
 
-ctx is a dict: ctx["params"] (settings dict from the user's request) and
-ctx["now"] (ISO timestamp string, Dhaka local time, UTC+6).
+ctx is a dict:
+- ctx["params"] — settings from the user's request
+- ctx["now"] — ISO timestamp string, Dhaka local time (UTC+6)
+- ctx["memory"] — dict that PERSISTS between runs. Store last-seen values,
+  counters, flags here; next run reads them back. This is how you detect
+  change: compare the fresh value to ctx["memory"]["last_x"], alert if
+  different/interesting, then UPDATE ctx["memory"]["last_x"] = fresh.
+  Keep memory small and JSON-serializable (numbers, strings, lists, dicts).
 
 Rules — the sandbox enforces these, violations kill the skill:
 - Allowed imports: requests, json, re, math, datetime, urllib.request,
@@ -44,8 +50,7 @@ Rules — the sandbox enforces these, violations kill the skill:
   sends it. Return {"message": "", "skip": "<reason>"} to stay silent
   (e.g. nothing changed). Keep messages under ~1500 characters.
 - Only send a message when something worth telling happened.
-- No persistence between runs (no files, no databases) — compute fresh
-  each run and compare against ctx["params"] if needed.
+- No files or databases — ctx["memory"] is your only persistence.
 
 Write robust, simple, short code. No commentary outside the function —
 your ENTIRE reply is the Python code for task(ctx)."""
@@ -94,16 +99,20 @@ try:
     _r = task(_ctx)
     if isinstance(_r, str):
         _r = {"message": _r}
-    _sys.stdout.write(_json.dumps({"ok": True, "result": _r}))
+    _sys.stdout.write(_json.dumps(
+        {"ok": True, "result": _r, "memory": _ctx.get("memory", {})},
+        default=str))
 except Exception as _e:
     _sys.stdout.write(_json.dumps(
         {"ok": False, "error": f"{type(_e).__name__}: {_e}"}))
 """
 
 
-def run_skill(code, user_params, timeout=90):
-    """Run skill code in a guarded subprocess.
-    Returns (ok, dict): ok=True → dict has 'result' (with 'message'),
+def run_skill(code, user_params, memory=None, timeout=90):
+    """Run skill code in a guarded subprocess. memory is the skill's
+    persistent dict (loaded from state); whatever it leaves there comes
+    back in out["memory"] for the parent to save.
+    Returns (ok, dict): ok=True → dict has 'message'/'skip'/'memory',
     ok=False → dict has 'error'. Never raises."""
     try:
         _guard(code)
@@ -112,6 +121,7 @@ def run_skill(code, user_params, timeout=90):
 
     ctx = {
         "params": user_params or {},
+        "memory": memory or {},
         "now": (datetime.now() + BD_OFFSET).isoformat(),
     }
     try:
@@ -147,7 +157,14 @@ def run_skill(code, user_params, timeout=90):
     if out.get("ok"):
         result = out.get("result") or {}
         msg = str(result.get("message", ""))[:4000]
-        return True, {"message": msg, "skip": result.get("skip", "")}
+        try:
+            mem = out.get("memory") or {}
+            if len(json.dumps(mem, default=str)) > 8000:
+                mem = {}  # runaway memory — reset rather than bloat state
+        except Exception:
+            mem = {}
+        return True, {"message": msg, "skip": result.get("skip", ""),
+                      "memory": mem}
     return False, {"error": str(out.get("error", "unknown error"))[:600]}
 
 

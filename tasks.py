@@ -284,15 +284,23 @@ def _watch_youtube(ctx):
 # ---------------------------------------------------------------------------
 
 def _run_skill_task(ctx):
-    ok, out = forge.run_skill(ctx["CODE"], ctx.get("PARAMS") or {}, timeout=90)
-    if ok and out.get("message"):
-        ctx["tg_send"](out["message"])
-    elif ok:
-        ctx["log"](f"skill silent: {out.get('skip', '')}")
+    name = ctx.get("name") or ""
+    memory = state.STATE.get("skill_memory", {}).get(name, {})
+    ok, out = forge.run_skill(
+        ctx["CODE"], ctx.get("PARAMS") or {}, memory=memory, timeout=90
+    )
+    if ok:
+        # persist whatever the skill left in memory (its only state)
+        state.STATE.setdefault("skill_memory", {})[name] = out.get("memory") or {}
+        state.save_soon()
+        if out.get("message"):
+            ctx["tg_send"](out["message"])
+        else:
+            ctx["log"](f"skill silent: {out.get('skip', '')}")
     else:
         ctx["tg_send"](
             f"⚠️ Skill failed: {out.get('error', '')[:300]}\n"
-            f"(stop it with /kill {ctx.get('name', '?')})"
+            f"(stop it with /kill {name or '?'})"
         )
 
 
@@ -576,6 +584,50 @@ def _selftest(ctx):
     )
 
 
+# ---------------------------------------------------------------------------
+# Daily self-report — the agent accounts for its own day. Free, no LLM.
+# ---------------------------------------------------------------------------
+
+def _daily_report(ctx):
+    from collections import Counter
+
+    today = f"{ctx['now']:%Y-%m-%d}"
+    runs = [r for r in state.STATE.get("runs", [])
+            if str(r.get("at", "")).startswith(today)]
+
+    lines = [f"📊 Daily report — {today}"]
+    if runs:
+        counts = Counter(r["task"] for r in runs)
+        fails = [r for r in runs if not r.get("ok")]
+        lines.append(f"Runs today: {len(runs)} across {len(counts)} tasks")
+        for name, n in counts.most_common(12):
+            lines.append(f"• {name} ×{n}")
+        if fails:
+            lines.append(f"❌ Failures: {len(fails)}")
+            for r in fails[:4]:
+                lines.append(f"  {r['task']}: {str(r.get('err', ''))[:80]}")
+        else:
+            lines.append("✅ No failures")
+    else:
+        lines.append("No scheduled runs today (only manual /run's?)")
+
+    quota = state.STATE.get("quota", {})
+    lines.append(f"LLM requests: {quota.get('used', 0)}/50 today")
+
+    try:  # app imports tasks, so import app lazily here
+        from app import REMINDERS
+
+        if REMINDERS:
+            lines.append("Pending reminders: " + "; ".join(
+                f"{r['text'][:30]} ({r['due']:%H:%M}) " for r in REMINDERS[:5]
+            ))
+    except Exception:
+        pass
+
+    lines.append("Active automations: /tasks • stop one: 'stop <name>'")
+    ctx["tg_send"]("\n".join(lines))
+
+
 TASKS = {
     "daily_briefing": {
         "desc": "Morning research summary on a topic of your choice",
@@ -605,6 +657,12 @@ TASKS = {
         "desc": "Check every subsystem in seconds (free, no LLM) — /run selftest",
         "schedule": _never,
         "run": _selftest,
+        "ctx": {},
+    },
+    "daily_report": {
+        "desc": "Evening summary of everything the agent did today (free)",
+        "schedule": _daily(21, 0),  # 9pm Dhaka
+        "run": _daily_report,
         "ctx": {},
     },
     "remind_me": {

@@ -298,6 +298,7 @@ HELP = """Hermes — your agent. Commands:
 /reminders — pending reminders
 /remind <when> <text> — set one (in 5m / at 18:30 / tomorrow 9am)
 /quota — LLM requests used today
+/report — today's activity summary (what ran, what failed)
 /kill <name> — stop a task created by message
 /diag — test the LLM connection, show any error
 
@@ -307,6 +308,8 @@ Or just talk, e.g.:
 "watch @SamayRainaOfficial for new videos"
 ANY other automation works too — the bot writes its own code:
 "check the USD to BDT rate every hour and tell me if it moves"
+Manage by chat: "stop the bitcoin alert", "make the weather
+report every 10 minutes", "move my briefing to 8am"
 Several requests in one message are fine too."""
 
 UNAUTHORIZED = "Not authorized. This agent answers its owner only."
@@ -363,6 +366,8 @@ clarifying questions):
   Use "forge" whenever the request is an automation that doesn't fit a
   template above (e.g. "check X every hour and tell me if Y",
   "daily report of Z from some website/API").
+- Stop an automation: {"action":"stop","target":"<task name or short description>"} — for "stop the bitcoin alert", "delete the weather thing"
+- Change a schedule: {"action":"edit","target":"<task name or description>","schedule":{"every_minutes":<N>} or {"daily":{"hour":<H>,"minute":<M>}}} — for "make the bitcoin report every 10 minutes", "move my briefing to 8am"
 
 One-time reminder: {"action":"reminder","when_spec":"<in 10m | in 2h | at 18:30 | tomorrow 9am>","text":"<what to remember>"}
 
@@ -415,6 +420,70 @@ def _create_and_save(spec):
     state.save_soon()
     log(f"dynamic task: {name}")
     return name
+
+
+def _find_dyn_task(target):
+    """Match a user's phrase ('the bitcoin alert') to a dynamic task name.
+    Exact/partial name match first, then word overlap on descriptions."""
+    t = (target or "").strip().lower()
+    if not t:
+        return None
+    for n in TASKS:
+        if n not in _CODE_TASKS and (t == n.lower() or n.lower().startswith(t)):
+            return n
+    words = set(t.replace("_", " ").split())
+    best, best_score = None, 0
+    for n, tk in TASKS.items():
+        if n in _CODE_TASKS:
+            continue
+        dw = set(tk["desc"].lower().split()) | set(n.lower().split("_"))
+        score = len(words & dw)
+        if score > best_score:
+            best, best_score = n, score
+    return best if best_score >= 1 else None
+
+
+def _stop_dyn_task(name):
+    """Remove a dynamic task from TASKS and saved state. Returns a
+    user-facing message; never raises."""
+    from tasks import dyn_task_name
+
+    t = TASKS.pop(name)
+    state.STATE["dynamic_tasks"] = [
+        s for s in state.STATE.get("dynamic_tasks", [])
+        if dyn_task_name(s) != name
+    ]
+    state.STATE.get("skill_memory", {}).pop(name, None)
+    state.save_soon()
+    log(f"task killed: {name}")
+    return f"🗑 Stopped: {t['desc']}"
+
+
+def _apply_schedule_to_spec(spec, sched):
+    """Set a new schedule on a dynamic task spec (in place)."""
+    params = spec.setdefault("params", {})
+    ttype = spec.get("type")
+    if ttype == "weather_once":
+        raise ValueError("one-time tasks run at a fixed time — "
+                         "stop it and create a new one")
+    if sched.get("daily"):
+        h = int(sched["daily"].get("hour", 8))
+        m = int(sched["daily"].get("minute", 0))
+        if not (0 <= h < 24 and 0 <= m < 60):
+            raise ValueError("hour/minute out of range")
+        if ttype == "skill":
+            params["schedule"] = {"daily": {"hour": h, "minute": m}}
+        else:
+            params["hour"] = h
+            params["minute"] = m
+    elif sched.get("every_minutes"):
+        n = max(1, int(sched["every_minutes"]))
+        if ttype == "skill":
+            params["schedule"] = {"every_minutes": n}
+        else:
+            params["every_minutes"] = n
+    else:
+        raise ValueError("schedule must be every_minutes or daily")
 
 
 def handle_plain_text(text):
@@ -523,6 +592,51 @@ def handle_plain_text(text):
                 )
             except Exception as e:
                 tg_send(f"Skill passed testing but saving failed: {e}")
+    elif action == "stop":
+        name = _find_dyn_task(data.get("target"))
+        if name:
+            tg_send(_stop_dyn_task(name))
+        else:
+            direct = (data.get("target") or "").strip().lower().replace(" ", "_")
+            code_hit = next(
+                (n for n in TASKS if n in _CODE_TASKS and direct and direct in n),
+                None,
+            )
+            if code_hit:
+                tg_send(f"'{code_hit}' is a built-in task — those stay.")
+            else:
+                tg_send(f"Couldn't find an automation like "
+                        f"'{data.get('target')}'. Send /tasks to see them.")
+    elif action == "edit":
+        name = _find_dyn_task(data.get("target"))
+        if not name:
+            tg_send(f"Couldn't find an automation like "
+                    f"'{data.get('target')}'. Send /tasks to see them.")
+            return
+        from tasks import dyn_task_name
+
+        spec = next(
+            (s for s in state.STATE.get("dynamic_tasks", [])
+             if dyn_task_name(s) == name),
+            None,
+        )
+        if spec is None:
+            tg_send("That task can't be rescheduled.")
+            return
+        try:
+            _apply_schedule_to_spec(spec, data.get("schedule") or {})
+            # remove the old entry everywhere (the name itself may change,
+            # e.g. briefing_0900 → briefing_0800), then re-create it
+            TASKS.pop(name, None)
+            state.STATE["dynamic_tasks"] = [
+                s for s in state.STATE.get("dynamic_tasks", [])
+                if dyn_task_name(s) != name
+            ]
+            state.save_soon()
+            new_name = _create_and_save(spec)
+            tg_send(f"🔁 Updated: {TASKS[new_name]['desc']}")
+        except Exception as e:
+            tg_send(f"Couldn't change that: {e}")
     elif action == "reminder":
         spec = f"{data.get('when_spec', '')} {data.get('text', '')}".strip()
         if not add_reminder(spec):
@@ -570,7 +684,7 @@ def dispatch(text):
             tg_send(f"No task '{name}'. Use /tasks.")
             return
         tg_send(f"Running {name}...")
-        run_task(name)  # result is delivered by the task itself
+        _run_task_safely(name)  # result is delivered by the task itself
     elif text.startswith("/ask "):
         tg_send(do_research(text[5:].strip()))
     elif text.startswith("/say "):
@@ -586,21 +700,11 @@ def dispatch(text):
         if name not in TASKS:
             tg_send(f"No task '{name}'. Use /tasks.")
         elif name in _CODE_TASKS:  # written in tasks.py — remove from there
-            tg_send(f"'{name}' is code-defined — delete it from tasks.py "
-                    f"to stop it permanently.")
+            tg_send(f"'{name}' is a built-in task — those stay.")
         else:
-            t = TASKS.pop(name)
-            # drop from saved state so restarts don't revive it. Names are
-            # deterministic, so compute each spec's name and compare.
-            from tasks import dyn_task_name
-
-            state.STATE["dynamic_tasks"] = [
-                s for s in state.STATE.get("dynamic_tasks", [])
-                if dyn_task_name(s) != name
-            ]
-            state.save_soon()
-            log(f"task killed: {name}")
-            tg_send(f"🗑 Killed: {t['desc']}")
+            tg_send(_stop_dyn_task(name))
+    elif text == "/report":
+        _run_task_safely("daily_report")  # sends the summary itself
     elif text == "/reminders":
         if not REMINDERS:
             tg_send("No pending reminders.")
@@ -671,13 +775,26 @@ def telegram_loop():
 
 
 def _run_task_safely(name):
+    ok, err = True, ""
     try:
         run_task(name)
     except Exception as e:
+        ok, err = False, f"{type(e).__name__}: {e}"
         import traceback
 
         traceback.print_exc()
         tg_send(f"⚠️ Task '{name}' failed: {e}")
+    finally:
+        # run history for the daily report — capped, gist-persisted
+        runs = state.STATE.setdefault("runs", [])
+        runs.append({
+            "task": name,
+            "at": (datetime.now() + BD_OFFSET).isoformat(),
+            "ok": ok,
+            "err": err[:200],
+        })
+        del runs[:-300]
+        state.save_soon()
 
 
 BD_OFFSET = timedelta(hours=6)  # Bangladesh is UTC+6

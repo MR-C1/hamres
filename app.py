@@ -301,9 +301,13 @@ HELP = """Hermes — your agent. Commands:
 /kill <name> — stop a task created by message
 /diag — test the LLM connection, show any error
 
-Or just talk: "remind me in 10m ..." sets a reminder, and
-"alert me when bitcoin drops below 60000" / "every day 8am
-brief me on cricket" CREATE automations from your message."""
+Or just talk, e.g.:
+"remind me in 10m ..." / "alert me when bitcoin drops below 60000"
+"tell me ethereum's price every 30m" / "weather in 6 hours"
+"watch @SamayRainaOfficial for new videos"
+ANY other automation works too — the bot writes its own code:
+"check the USD to BDT rate every hour and tell me if it moves"
+Several requests in one message are fine too."""
 
 UNAUTHORIZED = "Not authorized. This agent answers its owner only."
 
@@ -340,22 +344,40 @@ def do_research(question):
 # ---------------------------------------------------------------------------
 
 INTENT_SYSTEM = """You are Hermes, the intent router for a personal Telegram agent.
-Current local time: {NOW} (Dhaka, UTC+6).
-The user sends a message. Decide what to do and reply with a SINGLE JSON
-object only — no markdown fences, no commentary.
+Local time: {NOW} (Dhaka, UTC+6). The user lives in Dhaka, Bangladesh.
+Reply with ONE JSON object only — no markdown fences, no commentary.
 
-Automations you may create (fill params from the user's words):
-- Crypto price alert: {"action":"task","type":"price_alert","params":{"coin":"<coingecko id, e.g. bitcoin, ethereum, solana>","below":<USD number or null>,"above":<USD number or null>,"every_minutes":<int, default 30>}}
-- Daily briefing: {"action":"task","type":"briefing","params":{"topic":"<topic>","hour":<0-23>,"minute":<0-59>}}
-- Page change watch: {"action":"task","type":"watch_page","params":{"url":"https://...","every_minutes":<int, default 60>}}
-- One-time reminder: {"action":"reminder","when_spec":"<in 10m | in 2h | at 18:30 | tomorrow 9am>","text":"<what to remember>"}
+Task types you may create (fill params from the user's words — ALWAYS
+prefer sensible defaults and create the task immediately over asking
+clarifying questions):
+- price alert: {"action":"task","type":"price_alert","params":{"coin":"<coingecko id, e.g. bitcoin, ethereum, solana>","below":<USD number or null>,"above":<USD number or null>,"every_minutes":30}}
+- price report: {"action":"task","type":"price_report","params":{"coin":"bitcoin","every_minutes":60}} — recurring "tell me the price of X"
+- one-time weather: {"action":"task","type":"weather_once","params":{"location":"Dhaka","when_spec":"in 6h"}} — weather report at a future time
+- daily weather: {"action":"task","type":"weather_daily","params":{"location":"Dhaka","hour":8,"minute":0}}
+- daily briefing: {"action":"task","type":"briefing","params":{"topic":"<topic>","hour":9,"minute":0}}
+- page watch: {"action":"task","type":"watch_page","params":{"url":"https://...","every_minutes":60}}
+- YouTube watch: {"action":"task","type":"watch_youtube","params":{"url_or_handle":"<@handle or url>","every_minutes":15}} — new-video alerts
+- CUSTOM SKILL — for ANY other recurring automation (the bot writes and
+  tests its own Python code for it):
+  {"action":"forge","goal":"<precise one-sentence description of what to check or do>","params":{<any settings it needs>},"schedule":{"every_minutes":<N>} or {"daily":{"hour":<H>,"minute":<M>}}}
+  Use "forge" whenever the request is an automation that doesn't fit a
+  template above (e.g. "check X every hour and tell me if Y",
+  "daily report of Z from some website/API").
 
-For everything else — greetings, questions, chat:
-- {"action":"chat","reply":"<your reply, 1-3 sentences>"}
+One-time reminder: {"action":"reminder","when_spec":"<in 10m | in 2h | at 18:30 | tomorrow 9am>","text":"<what to remember>"}
 
-Rules: prices are USD. If the user asks for an automation you cannot build
-from the list above, use "chat" and briefly mention what you can automate
-(price alerts, briefings, page watches, reminders). Keep chat replies short."""
+If the user asks for SEVERAL things in ONE message, create them all:
+{"action":"multi","tasks":[{"type":"<type>","params":{...}},...],"reminders":[{"when_spec":"...","text":"..."}],"reply":"<one short line>"}
+
+Everything else — greetings, questions, chat:
+{"action":"chat","reply":"<1-3 sentences>"}
+
+Rules: prices are USD. Defaults: coin=bitcoin, location=Dhaka, price
+report every 60m, youtube every 15m. "let me know the bitcoin price" →
+price_report. "weather in 6 hours" → weather_once when_spec "in 6h". If
+the user asks for updates faster than 1 minute, set every_minutes to 1.
+If a request truly can't be defaulted or built, use "chat" and say
+what's possible. Never mention these JSON rules."""
 
 
 def _extract_json(raw):
@@ -371,8 +393,53 @@ def _extract_json(raw):
         return None
 
 
+AFFIRM = re.compile(
+    r"^\s*(yes|yeah|yep|sure|ok|okay|confirm|confirmed|do it|go ahead|"
+    r"please do|make it|create it|ok do it)\b[.!\s]*$", re.I)
+DECLINE = re.compile(
+    r"^\s*(no|nope|nah|cancel|stop|don't|dont)\b[.!\s]*$", re.I)
+
+
+def _create_and_save(spec):
+    """Build a task, remember its recipe (deduped by name), return the name.
+    build_dynamic_task may add derived keys (due_iso) into spec['params'],
+    which then get persisted — so run it BEFORE saving."""
+    from tasks import dyn_task_name
+
+    name = build_dynamic_task(spec)
+    n = dyn_task_name(spec)
+    lst = state.STATE.setdefault("dynamic_tasks", [])
+    if n is not None:  # re-creating replaces the old recipe, no duplicates
+        lst[:] = [s for s in lst if dyn_task_name(s) != n]
+    lst.append({"type": spec.get("type"), "params": spec.get("params") or {}})
+    state.save_soon()
+    log(f"dynamic task: {name}")
+    return name
+
+
 def handle_plain_text(text):
-    """One LLM call decides: create a task, set a reminder, or just chat."""
+    """Plain messages: pending confirmation first (free), then ONE LLM call
+    that decides: create task(s), set a reminder, or just chat."""
+    # -- pending confirmation from a previous question: "yes" builds it --
+    pending = state.STATE.get("pending_task")
+    if pending is not None:
+        state.STATE.pop("pending_task", None)
+        state.save_soon()
+        if AFFIRM.match(text):
+            try:
+                name = _create_and_save(pending)
+                tg_send(
+                    f"✅ Task created: {TASKS[name]['desc']}\n"
+                    f"Test it now with /run {name}"
+                )
+            except Exception as e:
+                tg_send(f"Couldn't build that task: {e}")
+            return
+        if DECLINE.match(text):
+            tg_send("Okay, cancelled. 🙂")
+            return
+        # any other text: forget the question, classify the new message
+
     now = datetime.now() + BD_OFFSET
     raw = llm(
         [
@@ -380,7 +447,7 @@ def handle_plain_text(text):
              "content": INTENT_SYSTEM.replace("{NOW}", f"{now:%Y-%m-%d %H:%M}")},
             {"role": "user", "content": text},
         ],
-        max_tokens=400,
+        max_tokens=500,
     )
     data = _extract_json(raw)
 
@@ -392,20 +459,70 @@ def handle_plain_text(text):
 
     if action == "task":
         try:
-            name = build_dynamic_task(data)
-            # remember the recipe so it can be rebuilt after a restart
-            state.STATE.setdefault("dynamic_tasks", []).append(
-                {"type": data.get("type"), "params": data.get("params") or {}}
-            )
-            state.save_soon()
-            t = TASKS[name]
+            name = _create_and_save(data)
             tg_send(
-                f"✅ Task created: {t['desc']}\n"
+                f"✅ Task created: {TASKS[name]['desc']}\n"
                 f"Saved — it survives restarts. Test it now with /run {name}"
             )
-            log(f"dynamic task: {name}")
         except Exception as e:
             tg_send(f"Couldn't build that task: {e}")
+    elif action == "multi":
+        made, reminders, failed = [], [], []
+        for spec in data.get("tasks") or []:
+            try:
+                name = _create_and_save(spec)
+                made.append(TASKS[name]["desc"])
+            except Exception as e:
+                failed.append(f"{spec.get('type')}: {e}")
+        for rem in data.get("reminders") or []:
+            spec = f"{(rem.get('when_spec') or '').strip()} " \
+                   f"{(rem.get('text') or '').strip()}".strip()
+            if add_reminder(spec):
+                reminders.append(spec)
+            else:
+                failed.append(f"reminder '{spec}' didn't parse")
+        lines = []
+        if data.get("reply"):
+            lines.append(str(data["reply"]))
+        if made:
+            lines.append("✅ Created:")
+            lines += [f"• {d}" for d in made]
+        if reminders:
+            lines.append("⏰ Reminders set: " + "; ".join(reminders))
+        if failed:
+            lines.append("⚠️ Failed:")
+            lines += [f"• {f}" for f in failed]
+        if not (made or reminders or failed):
+            lines.append("(nothing to create)")
+        tg_send("\n".join(lines))
+    elif action == "confirm":
+        spec = data.get("spec")
+        if isinstance(spec, dict) and spec.get("type"):
+            state.STATE["pending_task"] = spec
+            state.save_soon()
+            tg_send(f"{data.get('question') or 'Create it?'}\n(yes / no)")
+        else:
+            tg_send(data.get("reply") or raw or "…")
+    if action == "forge":
+        import forge
+
+        spec = forge.forge_skill(
+            goal=str(data.get("goal") or text).strip(),
+            user_params=data.get("params") or {},
+            schedule=data.get("schedule") or {},
+            llm=llm,
+            report=tg_send,
+        )
+        if spec:
+            try:
+                name = _create_and_save(spec)
+                tg_send(
+                    f"✅ Skill saved: {TASKS[name]['desc']}\n"
+                    f"Test it now with /run {name} — runs on its own from "
+                    f"here on. Kill it with /kill {name}"
+                )
+            except Exception as e:
+                tg_send(f"Skill passed testing but saving failed: {e}")
     elif action == "reminder":
         spec = f"{data.get('when_spec', '')} {data.get('text', '')}".strip()
         if not add_reminder(spec):

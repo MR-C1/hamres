@@ -130,12 +130,18 @@ def yt_resolve(url_or_handle):
 # ============================================================================
 
 def _daily_briefing(ctx):
-    """Compound topics get one search per topic, plus authoritative live
-    data (weather/prices/rates) — one LLM request total."""
+    """Daily briefing: per-topic search + FREE deep-read of the top page
+    per topic (page fetching costs no LLM requests), then one synthesis.
+    News must be sourced; advice comes from model knowledge."""
     import requests as rq
+
+    import research
+
     topic = ctx["TOPIC"]
     ctx["log"](f"briefing: {topic}")
+    bd = "bangladesh" in topic.lower() or "dhaka" in topic.lower()
 
+    # authoritative live data (never trust search for these)
     facts = []
     t = topic.lower()
     try:
@@ -156,14 +162,41 @@ def _daily_briefing(ctx):
         except Exception:
             pass
 
+    # compound topics get one search PER topic, Bangladesh-aware
     parts = [p.strip(" .:-") for p in re.split(r"[;,]|\(\d+\)|\d+\.", topic)
              if len(p.strip(" .:-")) > 3]
     queries = parts if 1 < len(parts) <= 6 else [topic]
 
-    results = []
+    results, per_topic = [], []
     for q in queries[:6]:
+        q2 = q if (not bd or "bangladesh" in q.lower()) else f"{q} Bangladesh"
         try:
-            results += ctx["web_search"](f"{q} latest news today", max_results=3)
+            rs = ctx["web_search"](f"{q2} latest", max_results=3)
+        except Exception:
+            rs = []
+        per_topic.append((q, rs))
+        results += rs
+
+    # deep-read: the top page per topic — free, and this is what makes
+    # the briefing useful instead of snippet-noise
+    pages = []
+    for q, rs in per_topic[:3]:
+        if not rs:
+            continue
+        try:
+            r = rq.get(rs[0]["href"], timeout=15, stream=True,
+                       headers={"User-Agent": "Mozilla/5.0"})
+            r.raise_for_status()
+            chunks, size = [], 0
+            for chunk in r.iter_content(chunk_size=64 * 1024):
+                chunks.append(chunk)
+                size += len(chunk)
+                if size >= 400 * 1024:
+                    break
+            page = research.extract_text(
+                b"".join(chunks).decode("utf-8", "ignore"))[:1800]
+            if len(page) > 150:
+                pages.append({"url": rs[0]["href"], "text": page})
         except Exception:
             pass
 
@@ -172,22 +205,34 @@ def _daily_briefing(ctx):
         context += "Live data (authoritative — use these numbers):\n" \
                    + "\n".join(facts) + "\n\n"
     if results:
-        context += "Web results:\n" + "\n\n".join(
-            f"[{i+1}] {r['title']}\n{r['body']}" for i, r in enumerate(results[:12]))
+        context += "Search results:\n" + "\n\n".join(
+            f"[{i+1}] {r['title']} — {r['href']}\n{r['body']}"
+            for i, r in enumerate(results[:12]))
+    if pages:
+        context += "\n\nRead pages (full content — prefer these):\n" + "\n\n".join(
+            f"[P{i+1}] {p['url']}\n{p['text']}" for i, p in enumerate(pages))
     if not context:
-        ctx["tg_send"](f"☀️ Briefing — {topic}\n"
-                       f"(nothing usable came back today — retrying next time)")
+        comms.send_md(f"☀️ **Daily briefing** — {topic}\n"
+                      f"(nothing usable came back today — retrying next time)")
         return
 
     summary = ctx["llm"]([
         {"role": "system",
-         "content": "Summarize today's briefing in 5-8 short bullet points. "
-                    "Use the live-data numbers as-is. Only include what the "
-                    "data/results actually say — if a topic has no data, "
-                    "skip it silently instead of announcing it's missing."},
-        {"role": "user", "content": f"Topic: {topic}\n\n{context[:12000]}"},
+         "content": "You are writing the user's daily briefing for Telegram. "
+                    "Rules: (1) NEWS items may ONLY come from the search "
+                    "results or read pages — put the source link in "
+                    "parentheses after each item. If the results are "
+                    "irrelevant junk, skip them silently; never pad with "
+                    "noise. (2) ADVICE, IDEAS, and RECOMMENDATIONS (money "
+                    "advice, business ideas, side hustles, tools) come from "
+                    "your own knowledge, tailored to the topic and the "
+                    "user's context (Bangladesh) — never pretend they're "
+                    "from search results. (3) Format: short section headers "
+                    "with an emoji, 1-2 line bullets, **bold** key phrases. "
+                    "Under ~300 words. Plain, punchy, no fluff."},
+        {"role": "user", "content": f"Topic: {topic}\n\n{context[:14000]}"},
     ])
-    ctx["tg_send"](f"☀️ <b>Daily briefing</b>\n{comms.esc(topic)}\n\n{summary}")
+    comms.send_md(f"☀️ **Daily briefing** — {topic}\n\n{summary}")
 
 
 def _price_watch(ctx):

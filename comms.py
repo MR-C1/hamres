@@ -2,6 +2,7 @@
 downloads, email, and the in-memory activity log."""
 
 import html as _html
+import re
 from datetime import datetime
 
 import requests
@@ -25,6 +26,21 @@ def log(event):
 def esc(s):
     """Escape user-derived text for safe use inside HTML messages."""
     return _html.escape(str(s or ""))
+
+
+def md(text):
+    """Escape for HTML, then convert common markdown (models love **bold**)
+    to Telegram HTML — so LLM output renders instead of showing asterisks."""
+    s = esc(text)
+    s = re.sub(r"^#{1,4}\s*(.+?)\s*$", r"<b>\1</b>", s, flags=re.M)
+    s = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", s, flags=re.S)
+    s = re.sub(r"(?<!\*)\*([^*\n]+?)\*(?!\*)", r"<i>\1</i>", s)
+    return s
+
+
+def send_md(text, chat_id=None):
+    """Send markdown-ish text rendered as Telegram HTML."""
+    return send(md(text), chat_id=chat_id, html=True)
 
 
 def send(text, chat_id=None, html=False):

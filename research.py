@@ -110,7 +110,7 @@ def summarize_url(url):
                         "Bangla/Banglish pages: answer in the same style."},
             {"role": "user", "content": f"URL: {url}\n\n{page}"},
         ], max_tokens=500)
-        comms.send(f"📄 {summary}")
+        comms.send_md(f"📄 {summary}")
     except Exception as e:
         comms.send(f"Read the page but summarizing failed: {e}")
 
@@ -179,4 +179,4 @@ def deep_research(question):
     ], max_tokens=900)
     srcs = "\n".join(f"[{i+1}] {r['href']}" for i, r in enumerate(results))
     psrcs = "\n".join(f"[P{i+1}] {p['url']}" for i, p in enumerate(pages))
-    comms.send(f"{answer}\n\nSources:\n{srcs}" + (f"\n{psrcs}" if psrcs else ""))
+    comms.send_md(f"{answer}\n\nSources:\n{srcs}" + (f"\n{psrcs}" if psrcs else ""))

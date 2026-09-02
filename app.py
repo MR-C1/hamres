@@ -127,7 +127,7 @@ def cmd_run(args):
 
 def cmd_ask(args):
     comms.typing()
-    comms.send(research.ask(args))
+    comms.send_md(research.ask(args))
 
 
 def cmd_deep(args):

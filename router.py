@@ -335,7 +335,7 @@ def _chat_retry(text, sys_prompt):
 
 
 def _finish_chat(text, reply):
-    comms.send(reply)
+    comms.send_md(reply)  # models emit **markdown** — render it
     memory.record_chat(text, reply)
     for f in memory.auto_extract(text):
         comms.log(f"auto-memory: {f[:60]}")

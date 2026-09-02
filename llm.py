@@ -140,7 +140,7 @@ def diagnose():
     for model in model_chain():
         provider, base, key, bare = _resolve(model)
         try:
-            text = _chat(test, 20, bare, base, key)
+            text = _chat(test, 300, bare, base, key)
             lines.append(f"✅ {model} — replied: {text[:60]!r}")
             worked.append(model)
         except Exception as e:

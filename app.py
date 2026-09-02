@@ -131,7 +131,10 @@ def cmd_ask(args):
 
 
 def cmd_deep(args):
-    research.deep_research(args)
+    # background thread: deep research takes ~30s and must not block
+    # other commands in the Telegram loop
+    threading.Thread(target=research.deep_research, args=(args,),
+                     daemon=True).start()
 
 
 def cmd_say(args):
@@ -217,8 +220,10 @@ def cmd_diag(_):
 
 
 def cmd_verify(_):
+    # background thread: the battery takes ~1 min and must not block
+    # other commands in the Telegram loop
     import verify
-    verify.run()
+    threading.Thread(target=verify.run, daemon=True).start()
 
 
 COMMANDS = {

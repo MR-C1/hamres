@@ -36,7 +36,7 @@ ROUTER_CASES = [
      {"task", "multi"}),
     ("stop task", "stop the bitcoin alert", {"stop"}),
     ("enable task", "enable the heartbeat", {"enable"}),
-    ("edit task", "make the bitcoin alert every 10 minutes", {"edit"}),
+    ("edit task", "move the daily briefing to 8am", {"edit"}),
     ("expense", "spent 55 taka on tea", {"expense"}),
     ("spend query", "how much did i spend today",
      {"expense_query", "chat"}),
@@ -64,7 +64,7 @@ def _router_case(msg, acceptable):
         raw = llm.complete(
             [{"role": "system", "content": build_system_prompt(msg)},
              {"role": "user", "content": msg}],
-            max_tokens=300,
+            max_tokens=600,
         )
         data = _extract_json(raw)
         if not data:
@@ -159,7 +159,7 @@ def boot_check():
     try:
         reply = llm.complete(
             [{"role": "user", "content": "Reply with the single word: ok"}],
-            max_tokens=10)
+            max_tokens=150)
         llm_ok = bool(reply) and "ok" in reply.lower()
         detail = "" if llm_ok else f"LLM replied: {reply[:80]!r}"
     except Exception as e:

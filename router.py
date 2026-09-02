@@ -393,7 +393,7 @@ def handle_plain_text(text):
         [{"role": "system", "content": sys_prompt}]
         + memory.history_msgs()
         + [{"role": "user", "content": text}],
-        max_tokens=500,
+        max_tokens=600,
     )
     data = _extract_json(raw)
 

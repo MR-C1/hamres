@@ -44,10 +44,12 @@ Environment tab:
 
 ## Memory (free — 0 LLM requests)
 "remember my wifi password is xyz" → stored in the gist, survives
-restarts. "what's my wifi password?" / "what do you remember about X" →
-recalled, free. `/memories` lists, `/forget <what>` deletes (or
-"forget everything"). Relevant memories are also injected into normal
-chat replies automatically — still 1 request per message.
+restarts. "what's my wifi password?" / "what do you remember about X" /
+"what was the X I talked about" → recalled, free. `/memories` lists,
+`/forget <what>` deletes (or "forget everything"). Relevant memories
+are also injected into normal chat replies automatically — still 1
+request per message. The bot also keeps your last 6 chat exchanges for
+context, so follow-up questions work.
 ⚠️ Memories are plain text in a secret gist on GitHub — fine for
 low-stakes facts, NOT a password vault. Real passwords belong in a
 password manager.

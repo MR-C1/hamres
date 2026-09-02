@@ -50,16 +50,74 @@ def _every(hours):
 # Task 1: daily research briefing (uses 1 LLM request per day)
 # ---------------------------------------------------------------------------
 
+def _briefing_facts(topic):
+    """Concrete data for common briefing needs — fetched from free, no-key
+    sources. Much more reliable than web search for prices/weather/rates."""
+    facts = []
+    t = str(topic).lower()
+    try:
+        if "weather" in t or "dhaka" in t:
+            facts.append("Weather in Dhaka now: " + _fetch_weather("Dhaka"))
+    except Exception:
+        pass
+    for coin in ("bitcoin", "ethereum", "solana", "dogecoin"):
+        if coin in t:
+            try:
+                facts.append(f"{coin}: ${_fetch_price(coin, 'usd'):,.0f}")
+            except Exception:
+                pass
+    if "usd" in t or "bdt" in t or "exchange" in t or "rate" in t:
+        try:
+            import requests as rq
+
+            j = rq.get("https://open.er-api.com/v6/latest/USD", timeout=15).json()
+            facts.append(f"USD/BDT: {j['rates']['BDT']}")
+        except Exception:
+            pass
+    return facts
+
+
 def _daily_briefing(ctx):
+    import re as _re
+
     topic = ctx["TOPIC"] or "AI and tech news"
     ctx["log"](f"briefing: {topic}")
-    results = ctx["web_search"](f"{topic} latest news today", max_results=8)
-    context = "\n\n".join(f"[{i+1}] {r['title']}\n{r['body']}" for i, r in enumerate(results))
+
+    # compound topics ("(1) weather, (2) crypto, (3) …") get one search
+    # PER topic — one giant query returns junk
+    parts = [p.strip(" .:-") for p in _re.split(r"[;,]|\(\d+\)|\d+\.", topic)
+             if len(p.strip(" .:-")) > 3]
+    queries = parts if 1 < len(parts) <= 6 else [topic]
+
+    facts = _briefing_facts(topic)
+
+    results = []
+    for q in queries[:6]:
+        try:
+            results += ctx["web_search"](f"{q} latest news today", max_results=3)
+        except Exception:
+            pass
+
+    context = ""
+    if facts:
+        context += "Live data (authoritative — use these numbers):\n" \
+                   + "\n".join(facts) + "\n\n"
+    if results:
+        context += "Web results:\n" + "\n\n".join(
+            f"[{i+1}] {r['title']}\n{r['body']}" for i, r in enumerate(results[:12])
+        )
+    if not context:
+        ctx["tg_send"](f"☀️ Briefing — {topic}\n"
+                       f"(nothing usable came back today — retrying next time)")
+        return
+
     summary = ctx["llm"](
         [
-            {"role": "system", "content": "Summarize today's updates in 5-8 short "
-             "bullet points. Only include what's actually in the results."},
-            {"role": "user", "content": f"Topic: {topic}\n\n{context}"},
+            {"role": "system", "content": "Summarize today's briefing in 5-8 "
+             "short bullet points. Use the live-data numbers as-is. Only "
+             "include what the data/results actually say — if a topic has "
+             "no data, skip it silently instead of announcing it's missing."},
+            {"role": "user", "content": f"Topic: {topic}\n\n{context[:12000]}"},
         ]
     )
     ctx["tg_send"](f"☀️ Daily briefing — {topic}\n\n{summary}")
@@ -243,18 +301,31 @@ def _yt_resolve(url_or_handle):
 
 
 def _watch_youtube(ctx):
-    """New-video alert via the channel's public RSS feed — free, no key."""
+    """New-video alert via the channel's public RSS feed — free, no key.
+    YouTube's feed throws transient 500/404s at datacenter IPs, so one
+    retry before giving up."""
     import re as _re
+    import time as _time
     import requests as rq
 
     chan = ctx["CHANNEL_ID"]
-    r = rq.get(
-        "https://www.youtube.com/feeds/videos.xml",
-        params={"channel_id": chan},
-        headers={"User-Agent": "Mozilla/5.0"},
-        timeout=20,
-    )
-    r.raise_for_status()
+    last_exc = None
+    for attempt in (1, 2):
+        try:
+            r = rq.get(
+                "https://www.youtube.com/feeds/videos.xml",
+                params={"channel_id": chan},
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=20,
+            )
+            r.raise_for_status()
+            last_exc = None
+            break
+        except Exception as e:
+            last_exc = e
+            _time.sleep(4)
+    if last_exc is not None:
+        raise last_exc
     entries = _re.findall(
         r"<entry>.*?<yt:videoId>([\w-]{11})</yt:videoId>.*?<title>([^<]+)</title>",
         r.text, _re.S,

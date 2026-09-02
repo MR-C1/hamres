@@ -375,6 +375,8 @@ clarifying questions):
 - Change a schedule: {"action":"edit","target":"<task name or description>","schedule":{"every_minutes":<N>} or {"daily":{"hour":<H>,"minute":<M>}}} — for "make the bitcoin report every 10 minutes", "move my briefing to 8am"
 
 One-time reminder: {"action":"reminder","when_spec":"<in 10m | in 2h | at 18:30 | tomorrow 9am>","text":"<what to remember>"}
+Remember a fact: {"action":"remember","text":"<the full fact, verbatim>"} — whenever the user says remember/note/keep in mind, even mid-sentence or multi-line
+Recall a fact: {"action":"recall","query":"<what they're asking about>"} — questions about things the user previously told you to remember
 
 If the user asks for SEVERAL things in ONE message, create them all:
 {"action":"multi","tasks":[{"type":"<type>","params":{...}},...],"reminders":[{"when_spec":"...","text":"..."}],"reply":"<one short line>"}
@@ -425,6 +427,15 @@ def _create_and_save(spec):
     state.save_soon()
     log(f"dynamic task: {name}")
     return name
+
+
+def _stop_all_dyn():
+    """Stop every dynamic task (built-ins stay)."""
+    dyn = [n for n in list(TASKS) if n not in _CODE_TASKS]
+    for n in dyn:
+        _stop_dyn_task(n)
+    tg_send(f"🗑 Stopped {len(dyn)} task(s). Built-ins stay.")
+    return bool(dyn)
 
 
 def _find_dyn_task(target):
@@ -576,6 +587,26 @@ def _summarize_url(url):
         tg_send(f"Read the page but summarizing failed: {e}")
 
 
+# ---------------------------------------------------------------------------
+# Chat history — the last few exchanges, so follow-up messages have context.
+# Stored in gist state; injected into the prompt. Still 1 request per message.
+# ---------------------------------------------------------------------------
+
+def _history_msgs(limit=6):
+    """Recent turns as LLM messages."""
+    h = state.STATE.get("chat_history", [])[-limit:]
+    return [{"role": m["role"], "content": str(m["content"])[:400]} for m in h]
+
+
+def _record_chat(user_text, bot_reply):
+    h = state.STATE.setdefault("chat_history", [])
+    h.append({"role": "user", "content": (user_text or "")[:800],
+              "at": (datetime.now() + BD_OFFSET).isoformat()})
+    h.append({"role": "assistant", "content": (bot_reply or "")[:800]})
+    del h[:-12]  # keep the last 6 exchanges
+    state.save_soon()
+
+
 def handle_plain_text(text):
     """Plain messages: pending confirmation first (free), then ONE LLM call
     that decides: create task(s), set a reminder, or just chat."""
@@ -613,10 +644,9 @@ def handle_plain_text(text):
     if mem_block:
         sys_prompt += "\n\n" + mem_block
     raw = llm(
-        [
-            {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": text},
-        ],
+        [{"role": "system", "content": sys_prompt}]
+        + _history_msgs()
+        + [{"role": "user", "content": text}],
         max_tokens=500,
     )
     data = _extract_json(raw)
@@ -694,20 +724,24 @@ def handle_plain_text(text):
             except Exception as e:
                 tg_send(f"Skill passed testing but saving failed: {e}")
     elif action == "stop":
-        name = _find_dyn_task(data.get("target"))
-        if name:
-            tg_send(_stop_dyn_task(name))
+        target = (data.get("target") or "").strip().lower()
+        if target in ("all", "everything", "all tasks", "all automations"):
+            _stop_all_dyn()
         else:
-            direct = (data.get("target") or "").strip().lower().replace(" ", "_")
-            code_hit = next(
-                (n for n in TASKS if n in _CODE_TASKS and direct and direct in n),
-                None,
-            )
-            if code_hit:
-                tg_send(f"'{code_hit}' is a built-in task — those stay.")
+            name = _find_dyn_task(target)
+            if name:
+                tg_send(_stop_dyn_task(name))
             else:
-                tg_send(f"Couldn't find an automation like "
-                        f"'{data.get('target')}'. Send /tasks to see them.")
+                direct = target.replace(" ", "_")
+                code_hit = next(
+                    (n for n in TASKS if n in _CODE_TASKS and direct and direct in n),
+                    None,
+                )
+                if code_hit:
+                    tg_send(f"'{code_hit}' is a built-in task — those stay.")
+                else:
+                    tg_send(f"Couldn't find an automation like "
+                            f"'{data.get('target')}'. Send /tasks to see them.")
     elif action == "edit":
         name = _find_dyn_task(data.get("target"))
         if not name:
@@ -738,12 +772,19 @@ def handle_plain_text(text):
             tg_send(f"🔁 Updated: {TASKS[new_name]['desc']}")
         except Exception as e:
             tg_send(f"Couldn't change that: {e}")
+    elif action == "remember":
+        fact = str(data.get("text") or "").strip()
+        tg_send(memory.remember(fact) if fact else "Remember what? 🙂")
+    elif action == "recall":
+        tg_send(memory.recall(str(data.get("query") or text)))
     elif action == "reminder":
         spec = f"{data.get('when_spec', '')} {data.get('text', '')}".strip()
         if not add_reminder(spec):
             tg_send(REMIND_USAGE)
     else:  # chat
-        tg_send(data.get("reply") or raw or "…")
+        reply = data.get("reply") or raw or "…"
+        tg_send(reply)
+        _record_chat(text, reply)
 
 
 def handle_message(msg):
@@ -791,7 +832,19 @@ def dispatch(text):
     elif text.startswith("/ask "):
         tg_send(do_research(text[5:].strip()))
     elif text.startswith("/say "):
-        tg_send(llm([{"role": "user", "content": text[5:]}]))
+        mem_block = memory.inject_for(text[5:])
+        sys_p = ("You are Hermes, the user's personal Telegram agent in "
+                 "Dhaka. Reply in 1-3 short sentences, warm and direct, "
+                 "matching the user's language.")
+        if mem_block:
+            sys_p += "\n\n" + mem_block
+        reply = llm(
+            [{"role": "system", "content": sys_p}]
+            + _history_msgs()
+            + [{"role": "user", "content": text[5:]}]
+        )
+        tg_send(reply)
+        _record_chat(text[5:], reply)
     elif text == "/quota":
         q = _quota_report()
         reset = "midnight UTC (6am Dhaka)"
@@ -800,7 +853,9 @@ def dispatch(text):
                 f"(price/page watches) don't count.")
     elif text.startswith("/kill "):
         name = text[6:].strip()
-        if name not in TASKS:
+        if name.lower() in ("all", "everything"):
+            _stop_all_dyn()
+        elif name not in TASKS:
             tg_send(f"No task '{name}'. Use /tasks.")
         elif name in _CODE_TASKS:  # written in tasks.py — remove from there
             tg_send(f"'{name}' is a built-in task — those stay.")
@@ -845,15 +900,19 @@ def dispatch(text):
         # else goes to the intent router (or the link reader).
         low = text.lower()
 
-        m = re.match(r"^remember\s+(?:that\s+)?(.+)$", low)
+        m = re.match(r"^remember\s+(?:that\s+)?(.+)$", low, re.S)
         if m:
+            # re.S so multi-line "remember this;\n\nthese are…" stores
+            # EVERYTHING, not just the first line
             tg_send(memory.remember(text[m.start(1):]))  # original case
             return
 
         m = (re.match(r"^what's?\s+my\s+(.+)$", low)
              or re.match(r"^what\s+do\s+you\s+remember(?:\s+about\s+(.+))?$", low)
              or re.match(r"^what\s+did\s+i\s+(?:tell\s+you|say)\s+about\s+(.+)$", low)
-             or re.match(r"^do\s+you\s+remember\s+(.+)$", low))
+             or re.match(r"^do\s+you\s+remember\s+(.+)$", low)
+             or re.match(r"^what\s+was\s+the\s+(.+?)\s+(?:i\s+|we\s+)?"
+                         r"(?:talked|discussed|said|mentioned)\s+about$", low))
         if m:
             query = m.group(1) or text
             tg_send(memory.recall(query))
@@ -904,6 +963,9 @@ def telegram_loop():
             time.sleep(5)
 
 
+_FAIL_STREAKS = {}  # task name -> consecutive failures (quiet after the first)
+
+
 def _run_task_safely(name):
     ok, err = True, ""
     try:
@@ -913,7 +975,20 @@ def _run_task_safely(name):
         import traceback
 
         traceback.print_exc()
-        tg_send(f"⚠️ Task '{name}' failed: {e}")
+        streak = _FAIL_STREAKS.get(name, 0) + 1
+        _FAIL_STREAKS[name] = streak
+        if streak == 1:
+            # first failure of a streak: tell the owner once, then go
+            # quiet — the daily report still lists every failure
+            tg_send(
+                f"⚠️ Task '{name}' failed: {e}\n"
+                f"It keeps retrying on schedule — I'll only message again "
+                f"when it recovers. /kill {name} to stop it."
+            )
+    else:
+        had = _FAIL_STREAKS.pop(name, 0)
+        if had:
+            tg_send(f"✅ Task '{name}' recovered after {had} failed run(s).")
     finally:
         # run history for the daily report — capped, gist-persisted
         runs = state.STATE.setdefault("runs", [])

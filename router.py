@@ -86,11 +86,17 @@ def _extract_json(raw):
         return None
 
 
+_COT_LEAK = re.compile(
+    r"thinking process|step[- ]by[- ]step|let me (?:think|analyze|work)"
+    r"|^\s*1\.\s+\*\*", re.I)
+
+
 def _looks_like_junk(reply):
     """Catch every way free models break the protocol — all seen in the
     field: moderation artifacts ('User Safety: safe'), tool-call token
-    leaks ('<|tool_call_start|>[forget(...)]'), and our own protocol JSON
-    dumped as visible text. None of it may ever reach the user."""
+    leaks ('<|tool_call_start|>[forget(...)]'), our own protocol JSON
+    dumped as visible text, and chain-of-thought dumps. None of it may
+    ever reach the user."""
     if not reply or len(reply.strip()) < 2:
         return True
     if re.match(r"^\s*(user|response)\s+safety", reply, re.I):
@@ -98,6 +104,8 @@ def _looks_like_junk(reply):
     if "tool_call" in reply or "<|" in reply:
         return True
     if '"action"' in reply:
+        return True
+    if _COT_LEAK.search(reply):
         return True
     return False
 
@@ -389,9 +397,10 @@ def handle_plain_text(text):
     )
     data = _extract_json(raw)
 
-    if not data:  # no JSON — treat the model's text as a chat reply
+    if not data:  # no JSON — treat the model's text as a chat reply,
+        # unless it's protocol garbage or a chain-of-thought dump
         reply = raw or "…"
-        if _looks_like_junk(reply):
+        if _looks_like_junk(reply) or len(reply) > 800:
             reply = _chat_retry(text, sys_prompt) or reply
         _finish_chat(text, reply)
         return

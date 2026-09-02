@@ -48,8 +48,12 @@ def _chat(messages, max_tokens, model, base, key):
     if "error" in data:
         raise RuntimeError(f"provider error: {str(data['error'])[:400]}")
     try:
-        return data["choices"][0]["message"]["content"].strip()
-    except (KeyError, IndexError, TypeError):
+        # content can be None (tool-call-only or empty responses)
+        content = data["choices"][0]["message"]["content"]
+        if not content or not content.strip():
+            raise ValueError("empty content")
+        return content.strip()
+    except (KeyError, IndexError, TypeError, ValueError):
         raise RuntimeError(f"unexpected response: {str(data)[:400]}")
 
 

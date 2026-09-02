@@ -278,7 +278,7 @@ def _handle_photo(msg):
     b64 = base64.b64encode(data).decode()
 
     vmodel = config.VISION_MODEL or (
-        "gemini:gemini-2.5-flash" if config.GEMINI_API_KEY
+        "gemini:gemini-3.6-flash" if config.GEMINI_API_KEY
         else "thinkingmachines/inkling:free")
     try:
         reply = llm.complete(

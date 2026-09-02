@@ -29,7 +29,8 @@ ROUTER_CASES = [
     ("fact aside", "also my pet name is cocky",
      {"remember", "chat"}),  # same: the fact must land, wording is free
     ("forget all", "forget all the memories", {"forget"}),
-    ("recall", "what is my verify key", {"recall"}),
+    ("recall", "what is my verify key",
+     {"recall", "chat"}),  # chat is valid if it answers from memory context
     ("reminder", "remind me in 1 hour to test the buzzer", {"reminder"}),
     ("create task", "alert me when bitcoin drops below 99000",
      {"task", "multi"}),

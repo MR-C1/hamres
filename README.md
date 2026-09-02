@@ -54,7 +54,7 @@ Several requests in one message work. Slash commands: /help /tasks /run
 | `TELEGRAM_BOT_TOKEN` | from @BotFather |
 | `OWNER_CHAT_ID` | your numeric id (@userinfobot) — the only obeyed user |
 | `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | primary provider (OpenRouter) |
-| `LLM_FALLBACK_MODELS` | e.g. `groq:llama-3.3-70b-versatile,gemini:gemini-2.5-flash,openrouter/free` |
+| `LLM_FALLBACK_MODELS` | e.g. `gemini:gemini-3.6-flash,minimax/minimax-m3:free,openrouter/free` |
 | `GROQ_API_KEY` | console.groq.com — 1,000 req/day + free Whisper voice |
 | `GEMINI_API_KEY` | aistudio.google.com — ~1,500 req/day + vision |
 | `GIST_TOKEN` | GitHub token, gists read/write — persistence across restarts |

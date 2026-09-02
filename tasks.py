@@ -746,7 +746,26 @@ def find(target):
             and best in CODE_TASKS and n not in CODE_TASKS)
         if wins:
             best, best_score = n, score
-    return best if best_score >= 1 else None
+    if best_score >= 1:
+        return best
+
+    # typo tolerance: "player alert" ≈ "prayer_alert" (no shared words,
+    # but the strings are close). Runs only when word overlap found nothing.
+    import difflib
+
+    scored = []
+    for n, tk in TASKS.items():
+        dw = set(tk["desc"].lower().split()) | set(n.lower().split("_"))
+        ratio = max((difflib.SequenceMatcher(None, w, d).ratio()
+                     for w in words for d in dw), default=0.0)
+        if ratio >= 0.75:
+            if n in CODE_TASKS:
+                ratio -= 0.05  # prefer chat-created tasks on near-ties
+            scored.append((ratio, n))
+    if scored:
+        scored.sort(reverse=True)
+        return scored[0][1]
+    return None
 
 
 def create_and_save(spec):

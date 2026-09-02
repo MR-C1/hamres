@@ -113,15 +113,15 @@ def cmd_tasks(_):
     paused = tasks.paused_names()
     comms.send("\n".join(
         f"{'⏸ ' if n in paused else ''}{n} — {comms.esc(t['desc'])}"
-        for n, t in tasks.TASKS.items()))
+        for n, t in tasks.TASKS.items()), html=True)
 
 
 def cmd_run(args):
     name = args.split()[0] if args else ""
     if name not in tasks.TASKS:
-        comms.send(f"No task '{comms.esc(name)}'. Use /tasks.")
+        comms.send(f"No task '{comms.esc(name)}'. Use /tasks.", html=True)
         return
-    comms.send(f"Running {comms.esc(name)}…")
+    comms.send(f"Running {comms.esc(name)}…", html=True)
     run_task_safely(name, manual=True)
 
 
@@ -267,7 +267,7 @@ def _handle_photo(msg):
     try:
         data, _ = comms.download(photo["file_id"])
     except Exception as e:
-        comms.send(f"Couldn't download the photo: {comms.esc(e)}")
+        comms.send(f"Couldn't download the photo: {comms.esc(e)}", html=True)
         return
     b64 = base64.b64encode(data).decode()
 
@@ -291,7 +291,7 @@ def _handle_photo(msg):
         comms.send(f"📷 {reply}")
         memory.record_chat(caption, reply)
     except Exception as e:
-        comms.send(f"Vision failed: {comms.esc(e)}")
+        comms.send(f"Vision failed: {comms.esc(e)}", html=True)
 
 
 def _handle_voice(msg):
@@ -304,7 +304,7 @@ def _handle_voice(msg):
     try:
         data, fname = comms.download(v["file_id"])
     except Exception as e:
-        comms.send(f"Couldn't download the voice note: {comms.esc(e)}")
+        comms.send(f"Couldn't download the voice note: {comms.esc(e)}", html=True)
         return
     try:
         r = requests.post(
@@ -319,13 +319,13 @@ def _handle_voice(msg):
         llm.count_request("groq")
         text = r.json()["text"].strip()
     except Exception as e:
-        comms.send(f"Transcription failed: {comms.esc(e)}")
+        comms.send(f"Transcription failed: {comms.esc(e)}", html=True)
         return
     if not text:
         comms.send("(couldn't hear anything in that note?)")
         return
     comms.log(f"voice: {text[:60]}")
-    comms.send(f"🎙 You said: {comms.esc(text)}")
+    comms.send(f"🎙 You said: {comms.esc(text)}", html=True)
     dispatch(text)  # act on it exactly like a typed message
 
 
@@ -351,7 +351,7 @@ def handle_message(msg):
         import traceback
         traceback.print_exc()
         comms.send(f"⚠️ Command failed: {comms.esc(type(e).__name__)}: "
-                   f"{comms.esc(e)}")
+                   f"{comms.esc(e)}", html=True)
 
 
 # ---------------------------------------------------------------------------

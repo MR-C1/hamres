@@ -101,7 +101,7 @@ def _act_task(data):
             f"Saved across restarts. Test now: <code>/run {name}</code>",
             html=True)
     except Exception as e:
-        comms.send(f"Couldn't build that task: {comms.esc(e)}")
+        comms.send(f"Couldn't build that task: {comms.esc(e)}", html=True)
 
 
 def _act_multi(data):
@@ -152,7 +152,7 @@ def _act_forge(data):
                 f"Test now: <code>/run {name}</code> • stop: <code>/kill {name}</code>",
                 html=True)
         except Exception as e:
-            comms.send(f"Skill passed testing but saving failed: {comms.esc(e)}")
+            comms.send(f"Skill passed testing but saving failed: {comms.esc(e)}", html=True)
 
 
 def _act_stop(data):
@@ -165,7 +165,7 @@ def _act_stop(data):
         comms.send(tasks.stop(name), html=True)
     else:
         comms.send(f"Couldn't find an automation like "
-                   f"'{comms.esc(data.get('target'))}'. Send /tasks to see them.")
+                   f"'{comms.esc(data.get('target'))}'. Send /tasks to see them.", html=True)
 
 
 def _act_enable(data):
@@ -180,7 +180,7 @@ def _act_edit(data):
     name = tasks.find(data.get("target"))
     if not name:
         comms.send(f"Couldn't find an automation like "
-                   f"'{comms.esc(data.get('target'))}'. Send /tasks to see them.")
+                   f"'{comms.esc(data.get('target'))}'. Send /tasks to see them.", html=True)
         return
     spec = next((s for s in state.STATE.get("dynamic_tasks", [])
                  if tasks.dyn_task_name(s) == name), None)
@@ -201,7 +201,7 @@ def _act_edit(data):
         comms.send(f"🔁 <b>Updated</b> — "
                    f"{comms.esc(tasks.TASKS[new_name]['desc'])}", html=True)
     except Exception as e:
-        comms.send(f"Couldn't change that: {comms.esc(e)}")
+        comms.send(f"Couldn't change that: {comms.esc(e)}", html=True)
 
 
 def _act_reminder(data):
@@ -334,7 +334,7 @@ def handle_plain_text(text):
                            f"{comms.esc(tasks.TASKS[name]['desc'])}\n"
                            f"Test now: <code>/run {name}</code>", html=True)
             except Exception as e:
-                comms.send(f"Couldn't build that task: {comms.esc(e)}")
+                comms.send(f"Couldn't build that task: {comms.esc(e)}", html=True)
             return
         if DECLINE.match(text):
             comms.send("Okay, cancelled. 🙂")
@@ -346,6 +346,17 @@ def handle_plain_text(text):
     mem_block = memory.inject_for(text)  # relevant facts — 0 extra requests
     if mem_block:
         sys_prompt += "\n\n" + mem_block
+    # existing automations: the model maps vague or typo'd references
+    # ("player alert" → prayer_alert) to real names itself
+    paused = tasks.paused_names()
+    task_lines = [
+        f"- {n}: {t['desc'][:60]}" + (" (paused)" if n in paused else "")
+        for n, t in tasks.TASKS.items()
+    ]
+    if task_lines:
+        sys_prompt += ("\n\nExisting automations — when the user references "
+                       "one (even approximately or with typos), put the REAL "
+                       "name in the target field:\n" + "\n".join(task_lines[:25]))
 
     raw = llm.complete(
         [{"role": "system", "content": sys_prompt}]
@@ -369,7 +380,7 @@ def handle_plain_text(text):
         try:
             handler(data)
         except Exception as e:
-            comms.send(f"⚠️ That action failed: {comms.esc(e)}")
+            comms.send(f"⚠️ That action failed: {comms.esc(e)}", html=True)
     else:  # unknown action — chat
         reply = data.get("reply") or raw or "…"
         if _looks_like_junk(reply):

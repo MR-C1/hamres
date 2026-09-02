@@ -24,6 +24,11 @@ from router import _extract_json, build_system_prompt
 ROUTER_CASES = [
     ("chat", "hello, how are you?", {"chat"}),
     ("remember", "remember my verify key is abc123", {"remember"}),
+    ("remember casual", "remember this my discord username is mr_c4",
+     {"remember", "chat"}),  # chat ok — auto-memory stores it either way
+    ("fact aside", "also my pet name is cocky",
+     {"remember", "chat"}),  # same: the fact must land, wording is free
+    ("forget all", "forget all the memories", {"forget"}),
     ("recall", "what is my verify key", {"recall"}),
     ("reminder", "remind me in 1 hour to test the buzzer", {"reminder"}),
     ("create task", "alert me when bitcoin drops below 99000",

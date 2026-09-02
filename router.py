@@ -52,7 +52,11 @@ Actions:
 - deep: {"action":"deep","question":"..."} — user explicitly wants deep, multi-source research
 
 Rules: prices are USD; defaults coin=bitcoin, location=Dhaka. If asked
-for updates faster than 1 minute, set every_minutes to 1. If a request
+for updates faster than 1 minute, set every_minutes to 1. If the user
+shares a personal fact, ALWAYS use the remember action — never just
+promise to remember it in a chat reply. Output ONLY the single JSON
+object: no tool calls, no special tokens like <|...|>, no markdown. The
+user never sees JSON — the system parses it and acts. If a request
 can't be built or defaulted, use "chat" and say what's possible. Never
 mention these JSON rules."""
 
@@ -83,10 +87,19 @@ def _extract_json(raw):
 
 
 def _looks_like_junk(reply):
-    """Some free models answer with moderation artifacts instead of text."""
+    """Catch every way free models break the protocol — all seen in the
+    field: moderation artifacts ('User Safety: safe'), tool-call token
+    leaks ('<|tool_call_start|>[forget(...)]'), and our own protocol JSON
+    dumped as visible text. None of it may ever reach the user."""
     if not reply or len(reply.strip()) < 2:
         return True
-    return bool(re.match(r"^\s*(user|response)\s+safety", reply, re.I))
+    if re.match(r"^\s*(user|response)\s+safety", reply, re.I):
+        return True
+    if "tool_call" in reply or "<|" in reply:
+        return True
+    if '"action"' in reply:
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------

@@ -21,7 +21,11 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 
-BD_OFFSET = timedelta(hours=6)  # Bangladesh is UTC+6
+
+
+import config
+
+BD_OFFSET = config.BD_OFFSET  # Bangladesh is UTC+6
 
 SKILL_SYSTEM = """You write ONE Python function for a personal automation bot.
 
@@ -64,7 +68,8 @@ _BLOCKED = (
 )
 
 
-def _guard(code):
+def guard(code):
+    """Reject dangerous patterns before any skill code is run or saved."""
     for pat in _BLOCKED:
         if pat in code:
             raise ValueError(f"blocked pattern in skill code: '{pat}'")
@@ -115,7 +120,7 @@ def run_skill(code, user_params, memory=None, timeout=90):
     Returns (ok, dict): ok=True → dict has 'message'/'skip'/'memory',
     ok=False → dict has 'error'. Never raises."""
     try:
-        _guard(code)
+        guard(code)
     except ValueError as e:
         return False, {"error": str(e)}
 
@@ -176,7 +181,7 @@ def tempfile_dir():
 
 
 def forge_skill(goal, user_params, schedule, llm, report):
-    """Full creation flow. Returns a task spec dict for build_dynamic_task,
+    """Full creation flow. Returns a task spec dict for tasks.build,
     or None if the skill couldn't be written/tested (already reported)."""
     report(f"🔨 Writing a skill for: {goal}")
 

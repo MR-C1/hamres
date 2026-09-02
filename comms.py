@@ -29,18 +29,23 @@ def esc(s):
 
 def send(text, chat_id=None, html=False):
     """Send a message, split at Telegram's 4096-char cap.
-    html=True enables HTML formatting (only for text we constructed)."""
+    html=True enables HTML formatting (only for text we constructed).
+    Returns True if Telegram accepted every chunk."""
     chat_id = chat_id or config.OWNER_CHAT_ID
     if not chat_id or not text:
-        return
+        return False
+    ok_all = True
     for i in range(0, len(text), 4000):
         payload = {"chat_id": chat_id, "text": text[i:i + 4000]}
         if html:
             payload["parse_mode"] = "HTML"
         try:
-            requests.post(f"{TG_API}/sendMessage", json=payload, timeout=10)
+            r = requests.post(f"{TG_API}/sendMessage", json=payload, timeout=10)
+            ok_all = ok_all and bool(r.json().get("ok", False))
         except Exception as e:
             print("[telegram] send failed:", e)
+            ok_all = False
+    return ok_all
 
 
 def typing(chat_id=None):
@@ -87,6 +92,7 @@ COMMAND_MENU = [
     ("kill", "Stop an automation"),
     ("enable", "Resume a paused one"),
     ("diag", "Test LLM connection"),
+    ("verify", "Full self-test (13 LLM calls)"),
 ]
 
 

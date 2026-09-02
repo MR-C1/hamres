@@ -216,6 +216,11 @@ def cmd_diag(_):
     comms.send(llm.diagnose())
 
 
+def cmd_verify(_):
+    import verify
+    verify.run()
+
+
 COMMANDS = {
     "help": cmd_help, "start": cmd_help,
     "tasks": cmd_tasks,
@@ -235,6 +240,7 @@ COMMANDS = {
     "summarize": cmd_summarize,
     "expenses": cmd_expenses,
     "diag": cmd_diag,
+    "verify": cmd_verify,
 }
 
 
@@ -415,6 +421,10 @@ def restore_state():
     if n_rem or n_dyn:
         comms.log(f"state restored: {n_rem} reminders, {n_dyn} tasks")
         state.save_soon()
+
+    # self-report after every deploy — no more silent broken deploys
+    import verify
+    verify.boot_check()
 
 
 # ---------------------------------------------------------------------------

@@ -93,17 +93,25 @@ def count_request(provider="default"):
 
 # --- the one entry point --------------------------------------------------------
 
-def complete(messages, max_tokens=800):
-    """Send a chat completion through the provider chain. Raises only if
-    every model in the chain fails."""
+LAST_MODEL = None  # which model answered the last complete() call
+
+
+def complete(messages, max_tokens=800, skip=()):
+    """Send a chat completion through the provider chain. `skip` names
+    models to bypass (used by junk-reply retries to force a different
+    model). Raises only if every model in the chain fails."""
+    global LAST_MODEL
     errors = []
     for model in model_chain():
+        if model in skip:
+            continue
         provider, base, key, bare = _resolve(model)
         if provider != "default" and not key:
             continue
         try:
             text = _chat(messages, max_tokens, bare, base, key)
             count_request(provider)
+            LAST_MODEL = model
             if model != config.LLM_MODEL:
                 comms.log(f"fallback used: {model} ({provider})")
             return text

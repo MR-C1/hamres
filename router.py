@@ -291,7 +291,9 @@ HANDLERS = {
 # ---------------------------------------------------------------------------
 
 def _chat_retry(text, sys_prompt):
-    """One retry when a model returns junk — nudge it to answer normally."""
+    """One retry when a model returns junk — on a DIFFERENT model, since
+    the same one usually junks again (reproduced live with openrouter/free)."""
+    skip = {llm.LAST_MODEL} if llm.LAST_MODEL else set()
     try:
         raw2 = llm.complete(
             [{"role": "system",
@@ -300,6 +302,7 @@ def _chat_retry(text, sys_prompt):
             + memory.history_msgs()
             + [{"role": "user", "content": text}],
             max_tokens=400,
+            skip=skip,
         )
         d2 = _extract_json(raw2)
         cand = (d2.get("reply") if d2 else None) or raw2
@@ -315,6 +318,28 @@ def _finish_chat(text, reply):
     memory.record_chat(text, reply)
     for f in memory.auto_extract(text):
         comms.log(f"auto-memory: {f[:60]}")
+
+
+def build_system_prompt(text):
+    """The exact prompt handle_plain_text sends — also used by verify.py
+    so self-tests exercise the real thing (no drift)."""
+    now = datetime.now() + config.BD_OFFSET
+    sys_prompt = INTENT_SYSTEM.replace("{NOW}", f"{now:%Y-%m-%d %H:%M}")
+    mem_block = memory.inject_for(text)  # relevant facts — 0 extra requests
+    if mem_block:
+        sys_prompt += "\n\n" + mem_block
+    # existing automations: the model maps vague or typo'd references
+    # ("player alert" → prayer_alert) to real names itself
+    paused = tasks.paused_names()
+    task_lines = [
+        f"- {n}: {t['desc'][:60]}" + (" (paused)" if n in paused else "")
+        for n, t in tasks.TASKS.items()
+    ]
+    if task_lines:
+        sys_prompt += ("\n\nExisting automations — when the user references "
+                       "one (even approximately or with typos), put the REAL "
+                       "name in the target field:\n" + "\n".join(task_lines[:25]))
+    return sys_prompt
 
 
 def handle_plain_text(text):
@@ -341,22 +366,7 @@ def handle_plain_text(text):
             return
         # any other text: forget the question, classify the new message
 
-    now = datetime.now() + config.BD_OFFSET
-    sys_prompt = INTENT_SYSTEM.replace("{NOW}", f"{now:%Y-%m-%d %H:%M}")
-    mem_block = memory.inject_for(text)  # relevant facts — 0 extra requests
-    if mem_block:
-        sys_prompt += "\n\n" + mem_block
-    # existing automations: the model maps vague or typo'd references
-    # ("player alert" → prayer_alert) to real names itself
-    paused = tasks.paused_names()
-    task_lines = [
-        f"- {n}: {t['desc'][:60]}" + (" (paused)" if n in paused else "")
-        for n, t in tasks.TASKS.items()
-    ]
-    if task_lines:
-        sys_prompt += ("\n\nExisting automations — when the user references "
-                       "one (even approximately or with typos), put the REAL "
-                       "name in the target field:\n" + "\n".join(task_lines[:25]))
+    sys_prompt = build_system_prompt(text)
 
     raw = llm.complete(
         [{"role": "system", "content": sys_prompt}]

@@ -44,12 +44,17 @@ LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://openrouter.ai/api/v1")
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
 LLM_MODEL = os.environ.get("LLM_MODEL", "openrouter/auto")
 # Fallback chain: comma-separated model ids tried in order when the primary
-# is down/overloaded/rate-limited. Add or reorder freely.
+# is down/overloaded/rate-limited. Entries may name another provider with
+# a prefix: "groq:MODEL" or "gemini:MODEL" (keys below), e.g.
+# LLM_FALLBACK_MODELS=groq:llama-3.3-70b-versatile,gemini:gemini-2.5-flash
 LLM_FALLBACK_MODELS = [
     m.strip()
     for m in os.environ.get("LLM_FALLBACK_MODELS", "").split(",")
     if m.strip()
 ]
+# Extra providers (free, card-free signups, OpenAI-compatible):
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")    # console.groq.com
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")  # aistudio.google.com
 
 TG_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
@@ -75,7 +80,31 @@ def log(event):
 # Raw requests (no SDK) so failures show the server's own error text.
 # ---------------------------------------------------------------------------
 
-_llm_format = None  # cached auto-detected format: "openai" | "anthropic"
+_llm_format = None  # cached auto-detected format (default provider only)
+
+# Multi-provider: "groq:MODEL" / "gemini:MODEL" entries in the chain route
+# to that provider's endpoint+key. Bare entries use the default provider.
+PROVIDERS = {
+    "groq": {
+        "base": "https://api.groq.com/openai/v1",
+        "key": GROQ_API_KEY,
+        "limit": 1000,  # free plan, requests/day (docs.groq)
+    },
+    "gemini": {
+        "base": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "key": GEMINI_API_KEY,
+        "limit": 1500,  # approx free-tier requests/day
+    },
+}
+
+
+def _resolve(model):
+    """'groq:x' | 'gemini:x' | bare → (provider, base, key, bare_model)."""
+    if ":" in model:
+        p, m = model.split(":", 1)
+        if p in PROVIDERS:
+            return p, PROVIDERS[p]["base"], PROVIDERS[p]["key"], m
+    return "default", _base_url(), LLM_API_KEY, model
 
 
 def _base_url():
@@ -87,8 +116,8 @@ def _raise(resp):
     raise RuntimeError(f"HTTP {resp.status_code} from {_base_url()}: {body}")
 
 
-def _openai_url():
-    base = _base_url()
+def _openai_url(base=None):
+    base = (base or _base_url()).rstrip("/")
     # Fully-qualified bases (end /v1, or Gemini-style .../openai) need only
     # the method path; OpenRouter-style bare bases need /v1 added.
     if base.endswith("/v1") or "/openai" in base:
@@ -103,11 +132,11 @@ def _anthropic_url():
     return base + "/v1/messages"
 
 
-def _llm_openai(messages, max_tokens, model):
-    url = _openai_url()
+def _llm_openai(messages, max_tokens, model, base=None, key=None):
+    url = _openai_url(base)
     resp = requests.post(
         url,
-        headers={"Authorization": f"Bearer {LLM_API_KEY}"},
+        headers={"Authorization": f"Bearer {key or LLM_API_KEY}"},
         json={"model": model, "messages": messages, "max_tokens": max_tokens},
         timeout=90,
     )
@@ -157,40 +186,50 @@ _FORMATS = (  # anthropic first: AgentRouter is anthropic-native
 
 
 def model_chain():
-    """Primary model first, then fallbacks, deduplicated."""
+    """Primary model first, then fallbacks, deduplicated. Entries whose
+    provider has no key configured are skipped."""
     chain = [LLM_MODEL] + LLM_FALLBACK_MODELS
     seen, out = set(), []
     for m in chain:
-        if m and m not in seen:
-            seen.add(m)
-            out.append(m)
+        if not m or m in seen:
+            continue
+        seen.add(m)
+        provider, _, key, _ = _resolve(m)
+        if provider != "default" and not key:
+            continue
+        out.append(m)
     return out
 
 
-DAILY_FREE_LIMIT = 50  # OpenRouter free tier; see /quota
+DAILY_FREE_LIMIT = 50  # default provider (OpenRouter free tier)
 
 
 def _today():
     return datetime.now().strftime("%Y-%m-%d")  # UTC day, matching OR's reset
 
 
-def _count_request():
-    """Track LLM requests per day in state so it survives restarts."""
-    q = state.STATE.setdefault("quota", {"day": _today(), "used": 0})
-    if q["day"] != _today():  # new day — reset counter
+def _quota_state():
+    q = state.STATE.setdefault("quota", {"day": _today(), "used": {}})
+    if q["day"] != _today():  # new day — reset counters
         q["day"] = _today()
-        q["used"] = 0
-    q["used"] += 1
-    state.save_soon()
-    return q["used"]
-
-
-def _quota_report():
-    q = state.STATE.setdefault("quota", {"day": _today(), "used": 0})
-    if q["day"] != _today():
-        q["day"] = _today()
-        q["used"] = 0
+        q["used"] = {}
+    if isinstance(q["used"], int):  # migrate the old single-counter format
+        q["used"] = {"default": q["used"]}
     return q
+
+
+def _count_request(provider="default"):
+    """Track LLM requests per provider per day (survives restarts)."""
+    q = _quota_state()
+    q["used"][provider] = q["used"].get(provider, 0) + 1
+    state.save_soon()
+    return q["used"][provider]
+
+
+def _provider_limit(provider):
+    if provider == "default":
+        return DAILY_FREE_LIMIT
+    return PROVIDERS.get(provider, {}).get("limit", "?")
 
 
 def llm(messages, max_tokens=800):
@@ -199,7 +238,21 @@ def llm(messages, max_tokens=800):
 
     errors = []
     for model in model_chain():
-        # 1. explicit format setting, 2. cached detection, 3. probe both
+        provider, base, key, bare = _resolve(model)
+
+        if provider != "default":
+            # groq/gemini: OpenAI-compatible, single attempt
+            try:
+                text = _llm_openai(messages, max_tokens, bare, base=base, key=key)
+                _count_request(provider)
+                if model != LLM_MODEL:
+                    log(f"fallback used: {model} ({provider})")
+                return text
+            except Exception as e:
+                errors.append(f"{model} [{provider}]: {str(e)[:200]}")
+            continue
+
+        # default provider: 1. explicit format, 2. cached, 3. probe both
         order = [f for f in _FORMATS if f[0] == forced] if forced else (
             [f for f in _FORMATS if f[0] == _llm_format] or list(_FORMATS)
         )
@@ -207,10 +260,10 @@ def llm(messages, max_tokens=800):
             try:
                 text = fn(messages, max_tokens, model)
                 _llm_format = name
-                used = _count_request()
+                used = _count_request("default")
                 if used == DAILY_FREE_LIMIT - 5:  # warn once near the cap
-                    tg_send(f"⚠️ Free-tier budget almost gone: "
-                            f"{used}/{DAILY_FREE_LIMIT} requests today.")
+                    tg_send(f"⚠️ OpenRouter free budget almost gone: "
+                            f"{used}/{DAILY_FREE_LIMIT} today.")
                 if model != LLM_MODEL:
                     log(f"fallback used: {model} ({name})")
                 return text
@@ -225,15 +278,26 @@ def diagnose():
     """Connection test — walks the whole model chain, reports which models
     answer and which fail, with the server's own error text."""
     lines = [
-        f"base_url: {_base_url()}",
-        f"key: {'set (' + str(len(LLM_API_KEY)) + ' chars)' if LLM_API_KEY else 'NOT SET'}",
-        f"format: {os.environ.get('LLM_API_FORMAT', 'auto-detect').strip() or 'auto-detect'}",
-        f"chain: {' → '.join(model_chain())}\n",
+        f"default base_url: {_base_url()}",
+        "providers: " + ", ".join(
+            f"{p} {'✅' if PROVIDERS[p]['key'] else '— no key'}"
+            for p in PROVIDERS
+        ) + f", default {'✅' if LLM_API_KEY else '— no key'}",
+        f"chain: {' → '.join(model_chain()) or '(empty)'}\n",
     ]
 
     test = [{"role": "user", "content": "Reply with the single word: ok"}]
     worked = []
     for model in model_chain():
+        provider, base, key, bare = _resolve(model)
+        if provider != "default":
+            try:
+                text = _llm_openai(test, 20, bare, base=base, key=key)
+                lines.append(f"✅ {model} — replied: {text[:60]!r}")
+                worked.append(model)
+            except Exception as e:
+                lines.append(f"❌ {model} — {str(e)[:300]}\n")
+            continue
         last_err = ""
         for name, fn in _FORMATS:
             try:
@@ -296,19 +360,24 @@ HELP = """Hermes — your agent. Commands:
 /ask <question> — research it (web + LLM)
 /status — uptime, memory, recent log
 /say <text> — chat with the LLM
+/deep <question> — deep research: search + read sources + cite (2 req)
 /reminders — pending reminders
 /remind <when> <text> — set one (in 5m / at 18:30 / tomorrow 9am)
 /memories — everything I remember about you
 /forget <what> — delete a memory (or 'forget everything')
 /summarize <url> — read a link and summarize it
-/quota — LLM requests used today
+/expenses — expense log: "spent 120 on rickshaw", "how much did i spend"
+/quota — LLM requests used today (per provider)
 /report — today's activity summary (what ran, what failed)
 /kill <name> — stop a task created by message
 /diag — test the LLM connection, show any error
 
 Or just talk, e.g.:
 "remember my wifi password is xyz" → "what's my wifi password?"
+"spent 120 on rickshaw" / "how much did I spend?"
+"email someone@gmail.com saying I'll be late"
 "remind me in 10m ..." / "alert me when bitcoin drops below 60000"
+📷 Send a photo with a question. 🎙 Send a voice note — it becomes text.
 "tell me ethereum's price every 30m" / "weather in 6 hours"
 "watch @SamayRainaOfficial for new videos"
 ANY other automation works too — the bot writes its own code:
@@ -364,7 +433,9 @@ clarifying questions):
 - daily weather: {"action":"task","type":"weather_daily","params":{"location":"Dhaka","hour":8,"minute":0}}
 - daily briefing: {"action":"task","type":"briefing","params":{"topic":"<topic>","hour":9,"minute":0}}
 - page watch: {"action":"task","type":"watch_page","params":{"url":"https://...","every_minutes":60}}
+- RSS feed watch: {"action":"task","type":"watch_rss","params":{"url":"<feed url>","every_minutes":30}} — new-entry alerts for any RSS/Atom feed
 - YouTube watch: {"action":"task","type":"watch_youtube","params":{"url_or_handle":"<@handle or url>","every_minutes":15}} — new-video alerts
+- Send an email: {"action":"email","to":"<address>","subject":"<subject>","text":"<message>"} — for "email X saying Y"
 - CUSTOM SKILL — for ANY other recurring automation (the bot writes and
   tests its own Python code for it):
   {"action":"forge","goal":"<precise one-sentence description of what to check or do>","params":{<any settings it needs>},"schedule":{"every_minutes":<N>} or {"daily":{"hour":<H>,"minute":<M>}}}
@@ -542,6 +613,135 @@ def _extract_text(html):
     p = _T()
     p.feed(html)
     return " ".join(p.parts)
+
+
+# ---------------------------------------------------------------------------
+# Deep research — /deep <question>: search → pick best sources → read them
+# → synthesize with citations. 2 LLM requests, opt-in.
+# ---------------------------------------------------------------------------
+
+def _deep_research(question):
+    if not question:
+        return "Ask me something: /deep <question>"
+    tg_send(f"🔬 Deep research: {question}\n(searching + reading sources…)")
+    try:
+        results = web_search(question, max_results=6)
+    except Exception as e:
+        return f"Search failed: {e}"
+    if not results:
+        return "No search results came back — try rephrasing?"
+
+    # 1st LLM call: pick the 3 most promising URLs
+    listed = "\n".join(f"{i+1}. {r['title']} — {r['href']}"
+                       for i, r in enumerate(results))
+    try:
+        pick = llm(
+            [
+                {"role": "system",
+                 "content": "Pick the 3 URLs most likely to answer the "
+                            "question. Reply ONLY a JSON array of index "
+                            "numbers, e.g. [1,3,5]."},
+                {"role": "user", "content": f"Question: {question}\n\n{listed}"},
+            ],
+            max_tokens=60,
+        )
+        idxs = [i - 1 for i in json.loads(pick.strip())
+                if isinstance(i, int) and 1 <= i <= len(results)][:3]
+    except Exception:
+        idxs = [0, 1, 2]
+
+    # read the picked pages (free — no LLM)
+    pages = []
+    for i in idxs:
+        try:
+            r = requests.get(results[i]["href"], timeout=20, stream=True,
+                             headers={"User-Agent": "Mozilla/5.0"})
+            r.raise_for_status()
+            chunks, size = [], 0
+            for chunk in r.iter_content(chunk_size=64 * 1024):
+                chunks.append(chunk)
+                size += len(chunk)
+                if size >= 600 * 1024:
+                    break
+            page = _extract_text(
+                b"".join(chunks).decode("utf-8", "ignore"))[:2500]
+            if len(page) > 150:
+                pages.append({"url": results[i]["href"], "text": page})
+        except Exception:
+            pass
+
+    context = "Search results:\n" + "\n\n".join(
+        f"[{i+1}] {r['title']}\n{r['href']}\n{r['body']}"
+        for i, r in enumerate(results))
+    if pages:
+        context += "\n\nRead pages:\n" + "\n\n".join(
+            f"[P{i+1}] {p['url']}\n{p['text']}" for i, p in enumerate(pages))
+
+    # 2nd LLM call: synthesize
+    answer = llm(
+        [
+            {"role": "system",
+             "content": "Research assistant. Answer the question using the "
+                        "search results and read pages. Cite sources as [1] "
+                        "or [P1]. Be concrete and complete but concise. If "
+                        "sources disagree or lack the answer, say so."},
+            {"role": "user",
+             "content": f"Question: {question}\n\n{context[:15000]}"},
+        ],
+        max_tokens=900,
+    )
+    srcs = "\n".join(f"[{i+1}] {r['href']}" for i, r in enumerate(results))
+    psrcs = "\n".join(f"[P{i+1}] {p['url']}" for i, p in enumerate(pages))
+    return f"{answer}\n\nSources:\n{srcs}" + (f"\n{psrcs}" if psrcs else "")
+
+
+# ---------------------------------------------------------------------------
+# Email — Gmail app password (SMTP_* env vars). Free, no card.
+# ---------------------------------------------------------------------------
+
+def _send_email(to, subject, body):
+    """Returns None on success, or an error/config message."""
+    user = os.environ.get("SMTP_USER", "")
+    pw = os.environ.get("SMTP_PASS", "")
+    if not (user and pw):
+        return ("Email isn't configured. On Render set SMTP_USER (your "
+                "Gmail) and SMTP_PASS (an app password — Google account → "
+                "Security → 2-Step Verification → App passwords).")
+    host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+    port = int(os.environ.get("SMTP_PORT", "465"))
+    import smtplib
+    from email.mime.text import MIMEText
+
+    try:
+        msg = MIMEText(body)
+        msg["Subject"] = subject
+        msg["From"] = os.environ.get("EMAIL_FROM", user)
+        msg["To"] = to
+        with smtplib.SMTP_SSL(host, port, timeout=30) as s:
+            s.login(user, pw)
+            s.send_message(msg)
+        return None
+    except Exception as e:
+        return f"Send failed: {e}"
+
+
+# ---------------------------------------------------------------------------
+# Expenses — free, rule-based. "spent 120 on rickshaw" / "how much did i spend"
+# ---------------------------------------------------------------------------
+
+def _expense_list():
+    exps = state.STATE.get("expenses", [])
+    if not exps:
+        return "No expenses logged. Say: spent <amount> on <thing>"
+    now = datetime.now() + BD_OFFSET
+    today = f"{now:%Y-%m-%d}"
+    d = sum(e["amount"] for e in exps if str(e["at"])[:10] == today)
+    m = sum(e["amount"] for e in exps if str(e["at"])[:7] == today[:7])
+    lines = [f"💸 Today: {d:,.0f} tk | this month: {m:,.0f} tk",
+             "Recent:"]
+    lines += [f"• {e['amount']:,.0f} tk — {e['what']} ({str(e['at'])[5:10]})"
+              for e in exps[-10:]]
+    return "\n".join(lines)
 
 
 def _summarize_url(url):
@@ -772,6 +972,15 @@ def handle_plain_text(text):
             tg_send(f"🔁 Updated: {TASKS[new_name]['desc']}")
         except Exception as e:
             tg_send(f"Couldn't change that: {e}")
+    elif action == "email":
+        to = str(data.get("to") or "").strip()
+        subject = str(data.get("subject") or "From your Hermes agent").strip()
+        body = str(data.get("text") or data.get("body") or "").strip()
+        if not (to and body):
+            tg_send("Email needs a recipient and a message.")
+        else:
+            err = _send_email(to, subject, body)
+            tg_send(err or f"📧 Sent to {to}")
     elif action == "remember":
         fact = str(data.get("text") or "").strip()
         tg_send(memory.remember(fact) if fact else "Remember what? 🙂")
@@ -785,13 +994,111 @@ def handle_plain_text(text):
         reply = data.get("reply") or raw or "…"
         tg_send(reply)
         _record_chat(text, reply)
+        for f in memory.auto_extract(text):
+            log(f"auto-memory: {f[:60]}")
+
+
+# ---------------------------------------------------------------------------
+# Vision + voice — photos understood by a multimodal model; voice notes
+# transcribed by Groq's free Whisper, then handled as text.
+# ---------------------------------------------------------------------------
+
+def _tg_download(file_id):
+    r = requests.get(f"{TG_API}/getFile", params={"file_id": file_id}, timeout=15)
+    r.raise_for_status()
+    fp = r.json()["result"]["file_path"]
+    r2 = requests.get(
+        f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{fp}", timeout=60
+    )
+    r2.raise_for_status()
+    return r2.content, fp
+
+
+def _handle_photo(msg):
+    import base64
+
+    photo = msg["photo"][-1]  # largest size
+    caption = (msg.get("caption") or
+               "What's in this image? Describe it briefly.").strip()
+    try:
+        data, _ = _tg_download(photo["file_id"])
+    except Exception as e:
+        tg_send(f"Couldn't download the photo: {e}")
+        return
+    b64 = base64.b64encode(data).decode()
+
+    vmodel = os.environ.get("VISION_MODEL", "").strip()
+    if not vmodel:
+        vmodel = ("gemini:gemini-2.5-flash" if GEMINI_API_KEY
+                  else "thinkingmachines/inkling:free")
+    try:
+        reply = llm(
+            [
+                {"role": "system",
+                 "content": "You are Hermes. Answer about the user's image "
+                            "concisely (1-4 sentences). Match their language."},
+                {"role": "user", "content": [
+                    {"type": "text", "text": caption},
+                    {"type": "image_url",
+                     "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                ]},
+            ],
+            max_tokens=400,
+        )
+        tg_send(f"📷 {reply}")
+        _record_chat(caption, reply)
+    except Exception as e:
+        tg_send(f"Vision failed: {e}")
+
+
+def _handle_voice(msg):
+    v = msg.get("voice") or msg.get("audio")
+    if not GROQ_API_KEY:
+        tg_send("Voice needs a GROQ_API_KEY (free at console.groq.com) — "
+                "add it on Render and I'll understand voice notes.")
+        return
+    try:
+        data, fname = _tg_download(v["file_id"])
+    except Exception as e:
+        tg_send(f"Couldn't download the voice note: {e}")
+        return
+    try:
+        r = requests.post(
+            "https://api.groq.com/openai/v1/audio/transcriptions",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+            files={"file": (fname.split("/")[-1] or "voice.ogg", data,
+                            "audio/ogg")},
+            data={"model": "whisper-large-v3-turbo"},
+            timeout=90,
+        )
+        r.raise_for_status()
+        _count_request("groq")
+        text = r.json()["text"].strip()
+    except Exception as e:
+        tg_send(f"Transcription failed: {e}")
+        return
+    if not text:
+        tg_send("(couldn't hear anything in that note?)")
+        return
+    log(f"voice: {text[:60]}")
+    tg_send(f"🎙 You said: {text}")
+    dispatch(text)  # act on it exactly like a typed message
 
 
 def handle_message(msg):
-    text = (msg.get("text") or "").strip()
-    if not text or not is_owner(msg):
-        if text and not is_owner(msg):
+    if not is_owner(msg):
+        if msg.get("text") or msg.get("photo") or msg.get("voice"):
             tg_send(UNAUTHORIZED, msg["chat"]["id"])
+        return
+    if msg.get("photo"):
+        _handle_photo(msg)
+        return
+    if msg.get("voice") or msg.get("audio"):
+        _handle_voice(msg)
+        return
+
+    text = (msg.get("text") or "").strip()
+    if not text:
         return
 
     log(f"command: {text[:60]}")
@@ -828,7 +1135,7 @@ def dispatch(text):
             tg_send(f"No task '{name}'. Use /tasks.")
             return
         tg_send(f"Running {name}...")
-        _run_task_safely(name)  # result is delivered by the task itself
+        _run_task_safely(name, manual=True)  # result delivered by the task
     elif text.startswith("/ask "):
         tg_send(do_research(text[5:].strip()))
     elif text.startswith("/say "):
@@ -846,11 +1153,16 @@ def dispatch(text):
         tg_send(reply)
         _record_chat(text[5:], reply)
     elif text == "/quota":
-        q = _quota_report()
-        reset = "midnight UTC (6am Dhaka)"
-        tg_send(f"LLM requests today: {q['used']}/{DAILY_FREE_LIMIT}\n"
-                f"Resets at {reset}. Reminders and free tasks "
-                f"(price/page watches) don't count.")
+        q = _quota_state()
+        used = q.get("used", {})
+        lines = ["LLM requests today (reset 6am Dhaka):"]
+        lines.append(f"• openrouter: {used.get('default', 0)}/{DAILY_FREE_LIMIT}")
+        for pname, p in PROVIDERS.items():
+            if p["key"]:
+                lines.append(f"• {pname}: {used.get(pname, 0)}/{p['limit']}")
+        lines.append("Reminders and free tasks (price/page/prayer watches) "
+                     "don't count.")
+        tg_send("\n".join(lines))
     elif text.startswith("/kill "):
         name = text[6:].strip()
         if name.lower() in ("all", "everything"):
@@ -867,8 +1179,12 @@ def dispatch(text):
         tg_send(memory.recent(15))
     elif text.startswith("/forget "):
         tg_send(memory.forget(text[8:].strip()))
+    elif text.startswith("/deep "):
+        tg_send(_deep_research(text[6:].strip()))
     elif text.startswith("/summarize "):
         _summarize_url(text[11:].strip())
+    elif text == "/expenses":
+        tg_send(_expense_list())
     elif text == "/reminders":
         if not REMINDERS:
             tg_send("No pending reminders.")
@@ -923,6 +1239,32 @@ def dispatch(text):
             tg_send(memory.forget(m.group(1)))
             return
 
+        # expenses: "spent 120 on rickshaw" — free, no LLM
+        m = re.match(r"^(?:i\s+)?(?:spent|paid)\s+(\d+(?:\.\d+)?)\s*"
+                     r"(?:taka|tk|bdt|৳)?\s*(?:on|for|in)?\s+(.+)$", low)
+        if m and len(m.group(2)) > 1:
+            amount = float(m.group(1))
+            what = " ".join(text[m.start(2):].split())
+            state.STATE.setdefault("expenses", []).append({
+                "amount": amount, "what": what,
+                "at": (datetime.now() + BD_OFFSET).isoformat(),
+            })
+            state.save_soon()
+            now = datetime.now() + BD_OFFSET
+            day = sum(e["amount"] for e in state.STATE["expenses"]
+                      if str(e["at"])[:10] == f"{now:%Y-%m-%d}")
+            tg_send(f"💸 Logged {amount:,.0f} tk — {what}. "
+                    f"Today: {day:,.0f} tk")
+            return
+        if re.match(r"^how much (?:did i|have i|do i) spend", low):
+            now = datetime.now() + BD_OFFSET
+            exps = state.STATE.get("expenses", [])
+            d = sum(e["amount"] for e in exps if str(e["at"])[:10] == f"{now:%Y-%m-%d}")
+            mo = sum(e["amount"] for e in exps if str(e["at"])[:7] == f"{now:%Y-%m}")
+            tg_send(f"💸 Today: {d:,.0f} tk | this month: {mo:,.0f} tk "
+                    f"(/expenses for the list)")
+            return
+
         if low.startswith("remind me "):
             spec = text[10:]
         elif low.startswith("remind "):
@@ -966,7 +1308,7 @@ def telegram_loop():
 _FAIL_STREAKS = {}  # task name -> consecutive failures (quiet after the first)
 
 
-def _run_task_safely(name):
+def _run_task_safely(name, manual=False):
     ok, err = True, ""
     try:
         run_task(name)
@@ -990,16 +1332,19 @@ def _run_task_safely(name):
         if had:
             tg_send(f"✅ Task '{name}' recovered after {had} failed run(s).")
     finally:
-        # run history for the daily report — capped, gist-persisted
-        runs = state.STATE.setdefault("runs", [])
-        runs.append({
-            "task": name,
-            "at": (datetime.now() + BD_OFFSET).isoformat(),
-            "ok": ok,
-            "err": err[:200],
-        })
-        del runs[:-300]
-        state.save_soon()
+        # run history for the daily report — capped, gist-persisted.
+        # "quiet" tasks (every-minute checks) don't clutter the history.
+        if not TASKS.get(name, {}).get("quiet"):
+            runs = state.STATE.setdefault("runs", [])
+            runs.append({
+                "task": name,
+                "at": (datetime.now() + BD_OFFSET).isoformat(),
+                "ok": ok,
+                "err": err[:200],
+                "manual": manual,
+            })
+            del runs[:-300]
+            state.save_soon()
 
 
 BD_OFFSET = timedelta(hours=6)  # Bangladesh is UTC+6

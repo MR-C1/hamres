@@ -144,3 +144,33 @@ def inject_for(text, budget=1500):
     if not out:
         return ""
     return block + "\n".join(out)
+
+
+# Light auto-memory: catch fact-shaped phrases in normal chat and store
+# them silently. Regex-only, so it costs nothing and never hallucinates.
+_AUTO_PATTERNS = [
+    re.compile(r"\bmy name is ([\w .'-]{2,30})", re.I),
+    # lazy match + lookahead: stop the fact at , / and / . / end of sentence
+    re.compile(r"\bmy ([a-z][a-z ]{2,18}?) is ([\w .@#/+%-]{2,50}?)"
+               r"(?=$|[.!?]|,|\s+and\b|\s+but\b)", re.I),
+    re.compile(r"\bi live in ([\w ,]{2,30}?)(?=$|[.!?]|,|\s+and\b)", re.I),
+    re.compile(r"\bi (?:like|love|hate|prefer) ([\w ,]{2,35}?)(?=$|[.!?]|,|\s+and\b)", re.I),
+    re.compile(r"\bi(?:'m| am) (?:a|an) ([\w ]{2,35}?)(?=$|[.!?]|,|\s+and\b)", re.I),
+]
+
+
+def auto_extract(text):
+    """Pull fact-shaped phrases out of a chat message and remember them
+    (deduped). Returns the list of NEW facts stored — silent by design."""
+    out = []
+    for pat in _AUTO_PATTERNS:
+        for m in pat.finditer(text or ""):
+            fact = " ".join(m.group(0).split())
+            if len(fact) < 8 or len(fact) > 90:
+                continue
+            if "remember" in fact.lower():
+                continue  # that's an explicit remember, handled elsewhere
+            r = remember(fact)
+            if "Remembered" in r:
+                out.append(fact)
+    return out

@@ -422,6 +422,8 @@ def dyn_task_name(spec):
         return f"weather_{hour:02d}{minute:02d}"
     if ttype == "watch_page":
         return f"watch_{_stable_id(params.get('url'))}"
+    if ttype == "watch_rss":
+        return f"rss_{_stable_id(params.get('url'))}"
     if ttype == "watch_youtube":
         return f"yt_{_stable_id(params.get('url_or_handle'))}"
     if ttype == "skill":
@@ -540,6 +542,20 @@ def build_dynamic_task(spec):
             "desc": f"Watch {url} every {every}m, ping on change",
             "schedule": _every(every / 60),
             "run": _watch_page,
+            "ctx": {"URL": url},
+        }
+        return base
+
+    if ttype == "watch_rss":
+        url = str(params.get("url") or "").strip()
+        every = max(5, int(params.get("every_minutes") or 30))
+        if not url.startswith("http"):
+            raise ValueError("url must start with http")
+        base = f"rss_{_stable_id(url)}"
+        TASKS[base] = {
+            "desc": f"Watch feed {url} every {every}m",
+            "schedule": _every(every / 60),
+            "run": _watch_feed,
             "ctx": {"URL": url},
         }
         return base
@@ -683,7 +699,26 @@ def _daily_report(ctx):
         lines.append("No scheduled runs today (only manual /run's?)")
 
     quota = state.STATE.get("quota", {})
-    lines.append(f"LLM requests: {quota.get('used', 0)}/50 today")
+    used = quota.get("used", {})
+    if isinstance(used, int):
+        used = {"default": used}
+    lines.append(f"LLM requests: openrouter {used.get('default', 0)}/50"
+                 + (f", groq {used.get('groq', 0)}/1000" if used.get("groq") else "")
+                 + (f", gemini {used.get('gemini', 0)}/1500" if used.get("gemini") else ""))
+
+    # expenses today
+    exps = [e for e in state.STATE.get("expenses", [])
+            if str(e.get("at", "")).startswith(today)]
+    if exps:
+        tot = sum(e["amount"] for e in exps)
+        lines.append(f"💸 Spent today: {tot:,.0f} tk ({len(exps)} items)")
+
+    # proactive: manual runs suggest automation
+    manual = Counter(r["task"] for r in runs if r.get("manual"))
+    sugg = [f"you ran {t} manually {n}× — say 'make {t} every 30m' to automate"
+            for t, n in manual.most_common(3) if n >= 3]
+    if sugg:
+        lines.append("💡 " + " | ".join(sugg))
 
     try:  # app imports tasks, so import app lazily here
         from app import REMINDERS
@@ -697,6 +732,88 @@ def _daily_report(ctx):
 
     lines.append("Active automations: /tasks • stop one: 'stop <name>'")
     ctx["tg_send"]("\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# Prayer times — Dhaka, aladhan.com (free, no key, no LLM). Sends the day's
+# times in the morning and a warning 10 minutes before each prayer.
+# ---------------------------------------------------------------------------
+
+_PRAYERS = ("Fajr", "Dhuhr", "Asr", "Maghrib", "Isha")
+
+
+def _prayer_alert(ctx):
+    import requests as rq
+    from datetime import timedelta
+
+    st = state.STATE.setdefault("prayer", {})
+    today = f"{ctx['now']:%Y-%m-%d}"
+    if st.get("date") != today:
+        try:
+            r = rq.get(
+                "https://api.aladhan.com/v1/timingsByCity",
+                params={"city": "Dhaka", "country": "Bangladesh", "method": 1},
+                timeout=15,
+            )
+            r.raise_for_status()
+            t = r.json()["data"]["timings"]
+            st.update({"date": today,
+                       "times": {p: t[p] for p in _PRAYERS},
+                       "alerted": []})
+            state.save_soon()
+            ctx["tg_send"]("🕌 Today's prayers (Dhaka):\n" + "\n".join(
+                f"• {p}: {t[p]}" for p in _PRAYERS))
+        except Exception as e:
+            ctx["log"](f"prayer fetch failed: {e}")
+            return
+
+    alerted = st.setdefault("alerted", [])
+    for p, hm in st.get("times", {}).items():
+        try:
+            h, mnt = map(int, str(hm).split(":")[:2])
+        except Exception:
+            continue
+        warn_at = ctx["now"].replace(hour=h, minute=mnt, second=0,
+                                     microsecond=0) - timedelta(minutes=10)
+        if warn_at <= ctx["now"] < warn_at + timedelta(minutes=1) \
+                and p not in alerted:
+            alerted.append(p)
+            state.save_soon()
+            ctx["tg_send"](f"🕌 {p} in 10 minutes ({hm} Dhaka)")
+
+
+# ---------------------------------------------------------------------------
+# RSS/Atom feed watcher — new-entry alerts for any feed (free, no key).
+# ---------------------------------------------------------------------------
+
+def _watch_feed(ctx):
+    import re as _re
+    import requests as rq
+
+    url = ctx["URL"]
+    r = rq.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
+    r.raise_for_status()
+    items = _re.findall(r"<item>(.*?)</item>", r.text, _re.S) or \
+        _re.findall(r"<entry>(.*?)</entry>", r.text, _re.S)
+    if not items:
+        ctx["log"](f"feed empty: {url}")
+        return
+    block = items[0]
+    lm = _re.search(r"<link[^>]*>([^<]+)</link>", block) or \
+        _re.search(r'<link[^>]*href="([^"]+)"', block)
+    tm = _re.search(r"<title[^>]*>(?:<!\[CDATA\[)?([^>\]]+)", block)
+    latest = (lm.group(1).strip() if lm else "",
+              tm.group(1).strip() if tm else "")
+
+    feeds = state.STATE.setdefault("feeds", {})
+    old = feeds.get(url)
+    feeds[url] = latest
+    state.save_soon()
+
+    if old and old != latest:
+        ctx["tg_send"](f"📰 New in feed: {latest[1] or latest[0]}\n{latest[0]}")
+    elif old is None:
+        ctx["log"](f"feed baseline set: {url}")
 
 
 TASKS = {
@@ -735,6 +852,13 @@ TASKS = {
         "schedule": _daily(21, 0),  # 9pm Dhaka
         "run": _daily_report,
         "ctx": {},
+    },
+    "prayer_alert": {
+        "desc": "Prayer times for Dhaka: morning list + 10-min warnings (free)",
+        "schedule": _every(1 / 60),  # every minute
+        "run": _prayer_alert,
+        "ctx": {},
+        "quiet": True,  # don't clutter the run history (1400+ runs/day)
     },
     "remind_me": {
         "desc": "A reminder template",

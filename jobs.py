@@ -24,24 +24,27 @@ def add_job(jtype, payload):
     job.update(payload)
     state.STATE["jobs"].append(job)
     del state.STATE["jobs"][:-100]  # keep the list bounded
-    state.save_soon()
+    state.save_now()  # immediate write — a crash can never lose a job
     return job
 
 
 def next_job():
-    """Claim the oldest pending job for the worker. A job claimed but not
-    reported on for 40 minutes goes back to pending (worker crashed)."""
+    """Claim the oldest pending job for the worker. Re-syncs the queue from
+    the gist first (source of truth), so a job queued by any thread or
+    process is always visible. A job claimed but not reported on for 40
+    minutes goes back to pending (worker crashed)."""
+    state.reload_jobs()
     now = time.time()
     for job in state.STATE["jobs"]:
         if job["status"] == "claimed" and now - job["updated"] > 2400:
             job["status"] = "pending"
             job["updated"] = now
-            state.save_soon()
+            state.save_now()
     for job in state.STATE["jobs"]:
         if job["status"] == "pending":
             job["status"] = "claimed"
             job["updated"] = now
-            state.save_soon()
+            state.save_now()  # immediate — two pollers can't both get it
             return job
     return None
 
@@ -53,7 +56,7 @@ def complete_job(job_id, result):
             job["updated"] = time.time()
             job["result"] = {k: result.get(k) for k in
                              ("msg", "video_url", "files")}
-            state.save_soon()
+            state.save_now()
             return job
     return None
 

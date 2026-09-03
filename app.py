@@ -55,6 +55,20 @@ def health():
     return "ok"
 
 
+@app.route("/debug")
+def debug():
+    if not config.WORKER_SECRET or request.headers.get("X-Worker-Secret") != config.WORKER_SECRET:
+        return jsonify({"error": "unauthorized"}), 403
+    import os
+    return jsonify({
+        "pid": os.getpid(),
+        "jobs_in_memory": len(state.STATE.get("jobs", [])),
+        "pending": jobs.pending_count(),
+        "worker_seen": state.STATE.get("worker", {}).get("last_seen", ""),
+        "uptime_s": int(time.time() - STARTED_AT),
+    })
+
+
 @app.route("/next-job")
 def next_job():
     if not config.WORKER_SECRET or request.headers.get("X-Worker-Secret") != config.WORKER_SECRET:

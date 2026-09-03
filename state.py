@@ -80,6 +80,29 @@ def load():
         LOADED = True
 
 
+def reload_jobs():
+    """Pull just the jobs list fresh from the gist — the queue's source of
+    truth. Protects against any divergence between background threads and
+    request handlers (multi-process quirks on Render)."""
+    global _gist_id
+    if not config.GIST_TOKEN:
+        return
+    try:
+        with _gist_id_lock:
+            if _gist_id is None:
+                _gist_id = _find_gist()
+            gist_id = _gist_id
+        if gist_id is None:
+            return
+        r = requests.get(f"https://api.github.com/gists/{gist_id}",
+                         headers=_headers(), timeout=10)
+        r.raise_for_status()
+        content = r.json()["files"][GIST_FILE].get("content") or "{}"
+        STATE["jobs"] = json.loads(content).get("jobs", STATE["jobs"])
+    except Exception as e:
+        print("[state] reload_jobs failed:", e)
+
+
 def _dump():
     for attempt in (1, 2):
         try:

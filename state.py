@@ -33,6 +33,7 @@ GIST_DESC = "channel-agent state"
 GIST_FILE = "channel-state.json"
 
 STATE = {}  # the single shared state dict — mutate in place, then save_soon()
+LOADED = False  # saves are blocked until the real state has been loaded
 
 _gist_id = None
 _gist_id_lock = threading.Lock()
@@ -55,11 +56,14 @@ def _find_gist():
 
 
 def load():
-    if not config.GIST_TOKEN:
-        print("[state] GIST_TOKEN not set — memory-only mode")
-        return
-    global _gist_id
+    """Fill STATE from the gist. Sets LOADED even on failure so a bad
+    gist can't deadlock saves forever."""
+    global LOADED
     try:
+        if not config.GIST_TOKEN:
+            print("[state] GIST_TOKEN not set — memory-only mode")
+            return
+        global _gist_id
         _gist_id = _find_gist()
         if not _gist_id:
             print("[state] no gist yet — created on first save")
@@ -72,6 +76,8 @@ def load():
         print(f"[state] restored {len(STATE)} keys from gist")
     except Exception as e:
         print("[state] load failed:", e)
+    finally:
+        LOADED = True
 
 
 def _dump():
@@ -85,8 +91,8 @@ def _dump():
 
 def save_now():
     global _gist_id
-    if not config.GIST_TOKEN:
-        return
+    if not config.GIST_TOKEN or not LOADED:
+        return  # never write before the real state is loaded (restart race)
     content = _dump()
     with _gist_id_lock:
         if _gist_id is None:
@@ -119,7 +125,7 @@ def _flush():
 def save_soon():
     """Debounced save — a burst of changes becomes one gist write (~2s)."""
     global _timer
-    if not config.GIST_TOKEN:
+    if not config.GIST_TOKEN or not LOADED:
         return
     with _timer_lock:
         if _timer is not None:

@@ -435,12 +435,11 @@ def scheduler_loop():
 # ---------------------------------------------------------------------------
 
 def boot():
-    state.default_state()  # defaults first — a gist failure can't leave us keyless
-    try:
-        state.load()
-        state.default_state()  # again after load: fill anything the gist lacked
-    except Exception as e:
-        print("[boot] state load failed, running on defaults:", e)
+    # SYNCHRONOUS load: must complete before gunicorn serves requests,
+    # otherwise a worker poll saves empty state over the real gist.
+    state.default_state()
+    state.load()          # sets LOADED — saves stay blocked until done
+    state.default_state()  # fill anything the gist lacked
     comms.register_menu()
     threading.Thread(target=state.saver_loop, daemon=True).start()
     threading.Thread(target=telegram_loop, daemon=True).start()
@@ -450,7 +449,7 @@ def boot():
                    f"Use /status for a health check.", html=True)
 
 
-threading.Thread(target=boot, daemon=True).start()
+boot()  # runs at import, before the first request can arrive
 
 
 if __name__ == "__main__":

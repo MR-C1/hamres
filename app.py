@@ -59,6 +59,7 @@ def health():
 def next_job():
     if not config.WORKER_SECRET or request.headers.get("X-Worker-Secret") != config.WORKER_SECRET:
         return jsonify({"error": "unauthorized"}), 403
+    state.default_state()  # idempotent — state keys always exist
     state.STATE["worker"]["last_seen"] = datetime.utcnow().isoformat()
     if state.STATE["worker"].get("warned_offline"):
         state.STATE["worker"]["warned_offline"] = False
@@ -72,6 +73,7 @@ def next_job():
 def report():
     if not config.WORKER_SECRET or request.headers.get("X-Worker-Secret") != config.WORKER_SECRET:
         return jsonify({"error": "unauthorized"}), 403
+    state.default_state()  # idempotent — state keys always exist
     data = request.get_json(force=True, silent=True) or {}
     job_id = data.get("job_id", "")
     ok = bool(data.get("ok"))
@@ -121,6 +123,7 @@ def _queue_upload(approval_id, note=""):
 # ---------------------------------------------------------------------------
 
 def handle_callback(cb):
+    state.default_state()
     data = cb.get("data", "")
     cid = cb.get("id")
     comms.answer_callback(cid)
@@ -393,6 +396,7 @@ def scheduler_loop():
 
     while True:
         now = datetime.now() + config.BD_OFFSET
+        state.default_state()  # self-heal if a restart lost keys
         if not state.STATE["settings"].get("paused"):
             once_per_day("daily report", brain.daily_report, 8, 0)
             once_per_day("planning", brain.analyze_and_plan, 8, 30)
@@ -431,8 +435,12 @@ def scheduler_loop():
 # ---------------------------------------------------------------------------
 
 def boot():
-    state.load()
-    state.default_state()
+    state.default_state()  # defaults first — a gist failure can't leave us keyless
+    try:
+        state.load()
+        state.default_state()  # again after load: fill anything the gist lacked
+    except Exception as e:
+        print("[boot] state load failed, running on defaults:", e)
     comms.register_menu()
     threading.Thread(target=state.saver_loop, daemon=True).start()
     threading.Thread(target=telegram_loop, daemon=True).start()

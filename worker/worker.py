@@ -216,6 +216,10 @@ def main():
                 if empty_polls % 5 == 1:  # heartbeat every ~5 min
                     log.info("idle — no jobs (polling every 60s, %d min)",
                              empty_polls)
+                # in cloud mode (deadline set): nothing to do for 5 min = leave
+                if deadline and empty_polls >= 5:
+                    log.info("idle for 5 min — exiting to save quota")
+                    break
             guard_disk()
         except requests.RequestException as e:
             log.warning("brain unreachable: %s", str(e)[:100])

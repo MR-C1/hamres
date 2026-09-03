@@ -1,0 +1,11 @@
+edge-tts>=7.2.8
+gTTS>=2.5
+moviepy>=2.1.2
+imageio-ffmpeg
+pillow>=10.0
+requests>=2.31
+PyYAML>=6.0
+google-api-python-client>=2.100
+google-auth-oauthlib>=1.1
+google-auth-httplib2>=0.2
+psutil>=5.9

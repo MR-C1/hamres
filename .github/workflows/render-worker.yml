@@ -6,7 +6,7 @@ on:
   schedule:
     - cron: "23 3 * * *"
     - cron: "23 11 * * *"
-    - cron: "23 19 * *"   # 09:23, 17:23, 01:23 Dhaka time
+    - cron: "23 19 * * *"   # 09:23, 17:23, 01:23 Dhaka time
   workflow_dispatch:            # allows manual runs from the Actions tab
 
 jobs:

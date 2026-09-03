@@ -1,0 +1,76 @@
+name: Render Worker
+
+# Cloud render farm: 3x a day, run the video worker for up to 40 minutes.
+# Free tier: ~120 min/day of the 2,000 min/month private-repo quota.
+on:
+  schedule:
+    - cron: "23 3,11,19 * *"   # 09:23, 17:23, 01:23 Dhaka time
+  workflow_dispatch:            # allows manual runs from the Actions tab
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: worker/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r worker/requirements.txt
+
+      - name: Write config and YouTube credentials
+        env:
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          AGENT_URL: ${{ secrets.AGENT_URL }}
+          WORKER_SECRET: ${{ secrets.WORKER_SECRET }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_TOKEN: ${{ secrets.YT_TOKEN }}
+        run: |
+          cat > worker/config.yaml <<EOF
+          channel:
+            name: "FOOTNOTE"
+          keys:
+            pexels: "${PEXELS_API_KEY}"
+          voice:
+            short: "en-US-ChristopherNeural"
+            long: "en-US-ChristopherNeural"
+            rate: "+8%"
+            volume: "+0%"
+          render:
+            long_width: 1920
+            long_height: 1080
+            short_width: 1080
+            short_height: 1920
+            fps: 30
+            caption_max_words: 4
+            music_volume: 0.08
+            max_clips_per_keyword: 8
+          upload:
+            privacy: "private"
+            schedule_at: "17:00"
+            made_for_kids: false
+            category_id: "27"
+          agent:
+            url: "${AGENT_URL}"
+            secret: "${WORKER_SECRET}"
+            bot_token: "${BOT_TOKEN}"
+            chat_id: "${CHAT_ID}"
+          EOF
+          printf '%s' "$YT_CLIENT_SECRET" > worker/client_secret.json
+          printf '%s' "$YT_TOKEN" > worker/token.json
+
+      - name: Run worker (up to 40 minutes)
+        env:
+          WORKER_MAX_MINUTES: "40"
+        run: python worker/worker.py
+
+      - name: Show what happened
+        if: always()
+        run: tail -30 worker/logs/worker.log || true

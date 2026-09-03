@@ -199,6 +199,10 @@ def main():
     empty_polls = 0
     while True:
         try:
+            # don't claim a job we can't finish before the deadline
+            if deadline and deadline - time.time() < 18 * 60:
+                log.info("under 18 min left — exiting, next run takes over")
+                break
             job = brain_get("/next-job")
             if job and job.get("type") in HANDLERS:
                 log.info("job %s (%s)", job["id"], job["type"])

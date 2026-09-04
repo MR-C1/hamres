@@ -207,10 +207,15 @@ def fetch_clips(keyword, orientation="landscape", api_keys=None, max_clips=6):
             return clips[:max_clips]
 
     results = []
+    # search wider than we need (3x): specific queries return few usable
+    # results, and the renderer rotates through the pool for variety —
+    # a bigger pool means fewer repeated clips
+    search_n = max(max_clips * 3, 15)
     # --- Pexels ---
     if api_keys.get("pexels"):
         try:
-            for v in _pexels_search(keyword, api_keys["pexels"], orientation, max_clips):
+            for v in _pexels_search(keyword, api_keys["pexels"], orientation,
+                                    search_n):
                 link = _pexels_best_file(v, orientation)
                 if link:
                     dest = d / f"pexels_{v['id']}.mp4"
@@ -224,7 +229,8 @@ def fetch_clips(keyword, orientation="landscape", api_keys=None, max_clips=6):
     # --- Pixabay fallback ---
     if not results and api_keys.get("pixabay"):
         try:
-            for v in _pixabay_search(keyword, api_keys["pixabay"], orientation, max_clips):
+            for v in _pixabay_search(keyword, api_keys["pixabay"], orientation,
+                                     search_n):
                 variants = v.get("videos", {})
                 files = list(variants.values())
                 files.sort(key=lambda f: f.get("width") or 0, reverse=True)

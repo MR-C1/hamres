@@ -38,12 +38,12 @@ SCRIPT_PROMPT = """Write ONE video script for a faceless YouTube facts/mystery c
   "id": "kebab-case-topic-slug",
   "format": ["short", "long"],
   "title": "Curiosity-gap title under 70 chars",
-  "description": "2-3 sentence YouTube description ending with a question",
-  "tags": ["facts", ...8-12 tags...],
+  "description": "Full YouTube description: 120-200 words. First 1-2 lines = a hook that sells the click (this text shows in search results). Then 2-3 short paragraphs of context that tease the mystery WITHOUT spoiling the answer. End with an engaging question, then a line of 4-6 hashtags relevant to THIS topic (like #unsolvedmystery #truehistory #didyouknow).",
+  "tags": ["8-14 specific tags: mix broad (facts, mystery) and topic-specific] ,
   "hook": "First 8 seconds of narration. Shocking claim or question. Max 25 words.",
   "scenes": [
     {{"narration": "35-60 words, conversational, fast, surprising.",
-      "visual_keywords": ["2-3 concrete stock-footage search phrases"],
+      "visual_keywords": ["2-3 stock-footage search phrases"],
       "in_short": true}}
   ],
   "outro": "One-line call to action, max 12 words."
@@ -51,17 +51,22 @@ SCRIPT_PROMPT = """Write ONE video script for a faceless YouTube facts/mystery c
 
 Rules: 7-9 scenes. Mark the 3 most visual scenes "in_short": true. All facts true and verifiable.
 
-CRITICAL — visual_keywords decide the stock footage shown during each scene:
-- Each keyword must DESCRIBE WHAT THE NARRATION LITERALLY MENTIONS in that scene.
-  If the scene says "dancers collapsed in the summer heat", the keywords are
-  "exhausted dancer collapsing" and "medieval street crowd" — NOT "history" or "people".
-- Search phrases must be 2-4 words, concrete and filmable: a person, object,
-  place, or action a camera can point at. Never abstract ("mystery", "time",
-  "history", "science", "facts"), never one word.
-- Prefer era/place specificity: "15th century manuscript pages", not "old book";
-  "Strasbourg medieval street", not "European city".
-- If a concept is abstract, film its concrete consequence instead: for "hysteria
-  spreading" use "panicked crowd running"; for "no explanation" use "empty dark street".
+CRITICAL — visual_keywords decide the stock footage shown during each scene. They are searched on stock-video sites (Pexels), so they must be phrased as searches that RETURN RESULTS there:
+- Describe what the narration literally mentions, in filmable terms: a person,
+  object, place, or action a camera can point at. NEVER abstract words
+  ("mystery", "history", "time", "facts", "story", "secret").
+- Use "concrete subject + common visual" phrasing that stock libraries stock:
+  "mans leather shoes closeup", "beach night waves", "old suitcase dark room",
+  "vintage newspaper printing press". NOT hyper-specific proper nouns that
+  return zero results ("Strasbourg 1518 street") — drop the proper noun,
+  keep the visual ("medieval cobblestone street").
+- VARIETY IS MANDATORY: no keyword may repeat across scenes, and no two
+  scenes may share more than one keyword. Each scene's footage must look
+  different from the previous scene's. Aim for wide variety: people, objects,
+  places, closeups, wide shots, day, night.
+- If a concept is abstract, film its concrete consequence: for "hysteria
+  spreading" use "panicked crowd running"; for "no explanation" use
+  "empty foggy road night".
 
 Topic guidance from the channel's growth analysis: {direction}
 Avoid these already-used topics: {used}

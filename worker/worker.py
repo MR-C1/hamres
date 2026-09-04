@@ -143,6 +143,30 @@ def do_render(job):
     return result
 
 
+def _enrich_meta(script, meta):
+    """Growth: build a full YouTube description from the script — hook
+    first (search-result text), context, hashtags, channel branding —
+    and merge tag lists. A 2-line description wastes YouTube's biggest
+    search surface."""
+    desc = meta.get("description", "") or script.get("description", "")
+    conf = CFG.get("channel", {})
+    hashtags = conf.get("hashtags", "")
+    name = conf.get("name", "")
+    # ensure the topic hashtags from the script's description survive,
+    # plus the channel's standing set, without duplicating lines
+    parts = [p for p in (desc.strip(), hashtags.strip()) if p]
+    if name:
+        parts.append(f"Subscribe to {name} for the details everyone else skipped.")
+    meta["description"] = "\n\n".join(dict.fromkeys(parts))
+    # tags: script tags + hashtag words, deduped, YouTube caps at ~500 chars
+    tags = [t.strip() for t in meta.get("tags", "").split(",") if t.strip()]
+    for word in hashtags.replace("#", "").split():
+        if word.lower() not in [t.lower() for t in tags]:
+            tags.append(word)
+    meta["tags"] = ", ".join(tags)
+    return meta
+
+
 def _upload_files(script, sid):
     import upload
     meta = {"title": script["title"],
@@ -152,6 +176,7 @@ def _upload_files(script, sid):
     if meta_path.exists():
         parsed = upload.parse_metadata(meta_path)
         meta.update({k: v for k, v in parsed.items() if v})
+    _enrich_meta(script, meta)
 
     urls = []
     for name in (f"{sid}_short.mp4", f"{sid}_long.mp4"):

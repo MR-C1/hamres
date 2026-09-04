@@ -171,16 +171,35 @@ def render_from_dict(script, config):
         # 3) assemble visual + audio + captions
         video_layers, audio_clips = [], []
         t = 0.0
+        used_clips = set()   # clip filenames already shown in THIS video
+        scene_no = 0
         for bid, s in blocks:
             mp3, words_path = audio[bid]
             d = durations[bid] + 0.35  # small pause between blocks
             kws = s.get("visual_keywords", [])
-            clips = []
+
+            # pool: this scene's keyword clips, deduped
+            clips, seen = [], set()
             for kw in kws:
-                clips.extend(keyword_clips.get(kw, []))
-            visual = scene_visual(clips, d, w, h, label=kws[0] if kws else "")
+                for c in keyword_clips.get(kw, []):
+                    if c.name not in seen:
+                        seen.add(c.name)
+                        clips.append(c)
+            # VARIETY: prefer clips not used by earlier scenes, then rotate
+            # the order per scene so even a small pool doesn't repeat the
+            # same first clip every time
+            fresh = [c for c in clips if c.name not in used_clips]
+            stale = [c for c in clips if c.name in used_clips]
+            ordered = fresh + stale
+            if ordered and scene_no:
+                rot = scene_no % len(ordered)
+                ordered = ordered[rot:] + ordered[:rot]
+            used_clips.update(c.name for c in ordered[:3])
+            visual = scene_visual(ordered, d, w, h,
+                                  label=kws[0] if kws else "")
             video_layers.append(visual.with_start(t).with_duration(d))
             audio_clips.append(AudioFileClip(str(mp3)).with_start(t + 0.1))
+            scene_no += 1
 
             # captions
             words = json.loads(words_path.read_text(encoding="utf-8"))

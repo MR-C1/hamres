@@ -84,6 +84,33 @@ def next_job():
     return jsonify(job or {})
 
 
+@app.route("/clear-queue", methods=["POST"])
+def clear_queue():
+    """Wipe the job queue (fresh start). Requires the worker secret so
+    only the owner's tooling can call it. Optionally ?jobs=failed to
+    only clear failed jobs, or ?all=1 to also drop pending approvals."""
+    if not config.WORKER_SECRET or request.headers.get("X-Worker-Secret") != config.WORKER_SECRET:
+        return jsonify({"error": "unauthorized"}), 403
+    state.default_state()
+    jobs.reload_jobs()
+    before = len(state.STATE["jobs"])
+    only_failed = request.args.get("jobs") == "failed"
+    if only_failed:
+        state.STATE["jobs"] = [j for j in state.STATE["jobs"]
+                               if j.get("status") != "failed"]
+    else:
+        state.STATE["jobs"] = []
+    if request.args.get("all") == "1":
+        state.STATE["pending_videos"] = {}
+    state.save_now()
+    comms.send(f"🧹 Queue cleared ({before} → "
+               f"{len(state.STATE['jobs'])} jobs"
+               + (", pending approvals dropped too" if request.args.get("all") == "1" else "")
+               + ").", html=True)
+    return jsonify({"ok": True, "before": before,
+                    "after": len(state.STATE["jobs"])})
+
+
 @app.route("/approval-status")
 def approval_status():
     """The rendering worker polls this while waiting for the owner's ✅.
@@ -378,6 +405,7 @@ COMMANDS = {
     "settings": cmd_settings,
     "diag": cmd_diag,
     "publish": cmd_publish,
+    "clear": cmd_clear,
 }
 
 
@@ -412,6 +440,24 @@ def _publish_pending():
         return
     for uid in undecided:
         _record_decision(uid, "approved")
+
+
+def cmd_clear(args):
+    """Clear the job queue: /clear (all jobs) or /clear failed."""
+    state.default_state()
+    jobs.reload_jobs()
+    before = len(state.STATE["jobs"])
+    if args.strip().lower() == "failed":
+        state.STATE["jobs"] = [j for j in state.STATE["jobs"]
+                               if j.get("status") != "failed"]
+        what = "failed jobs"
+    else:
+        state.STATE["jobs"] = []
+        what = "entire queue"
+    state.save_now()
+    comms.send(f"🧹 Cleared the {what} ({before} → "
+               f"{len(state.STATE['jobs'])} jobs remain). /next queues a "
+               f"fresh video.", html=True)
 
 
 def chat_reply(text):

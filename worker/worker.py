@@ -313,7 +313,14 @@ def main():
             if deadline and deadline - time.time() < 18 * 60:
                 log.info("under 18 min left — exiting, next run takes over")
                 break
-            job = brain_get("/next-job")
+            # cloud mode: tell the brain what we can still afford, so an
+            # 8-12 min render (60+ worker-minutes) stays queued for the
+            # unlimited PC worker instead of dying at our 40-min wall
+            path = "/next-job"
+            if deadline:
+                remaining = (deadline - time.time()) / 60
+                path = f"/next-job?max_cost_minutes={remaining:.0f}"
+            job = brain_get(path)
             if job and job.get("type") in HANDLERS:
                 log.info("job %s (%s)", job["id"], job["type"])
                 try:

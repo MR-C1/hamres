@@ -40,16 +40,27 @@ SCRIPT_PROMPT = """Write ONE video script for a faceless YouTube facts/mystery c
   "title": "Curiosity-gap title under 70 chars",
   "description": "Full YouTube description: 120-200 words. First 1-2 lines = a hook that sells the click (this text shows in search results). Then 2-3 short paragraphs of context that tease the mystery WITHOUT spoiling the answer. End with an engaging question, then a line of 4-6 hashtags relevant to THIS topic (like #unsolvedmystery #truehistory #didyouknow).",
   "tags": ["8-14 specific tags: mix broad (facts, mystery) and topic-specific] ,
-  "hook": "First 8 seconds of narration. Shocking claim or question. Max 25 words.",
+  "hook": "80-120 words. A cinematic COLD-OPEN vignette: drop the viewer INTO the single most striking moment of the story (a date, a place, a person mid-crisis). No greeting, no channel intro, no context. End on the framing question the whole video answers.",
   "scenes": [
-    {{"narration": "35-60 words, conversational, fast, surprising.",
+    {{"narration": "90-140 words, conversational, fast, surprising.",
       "visual_keywords": ["2-3 stock-footage search phrases"],
       "in_short": true}}
   ],
   "outro": "One-line call to action, max 12 words."
 }}
 
-Rules: 7-9 scenes. Mark the 3 most visual scenes "in_short": true. All facts true and verifiable.
+STRUCTURE (this is a mini-documentary, not a list of facts):
+- 10-14 scenes total, ~1,300-1,800 words of narration (8-11 minutes).
+- Organize as 3-5 ACTS. Each act digs into one phase/angle of the story and
+  ENDS unresolved or on a complication (open loop) — never on a conclusion.
+- Transitions between scenes must be "but/therefore" (escalate or complicate),
+  never "and then" (flat chronology). If a scene could be deleted without
+  breaking the chain, cut it.
+- The question from the hook must appear in the first 10% of the narration;
+  the resolution/payoff appears ONLY in the final 20%. Everything between
+  escalates.
+- Mark the 3 most visual scenes "in_short": true. All facts true, verifiable,
+  and specific (dates, numbers, names).
 
 CRITICAL — visual_keywords decide the stock footage shown during each scene. They are searched on stock-video sites (Pexels), so they must be phrased as searches that RETURN RESULTS there:
 - Describe what the narration literally mentions, in filmable terms: a person,
@@ -74,7 +85,68 @@ Avoid these already-used topics: {used}
 Return ONLY the JSON object."""
 
 
+VIRALITY_PROMPT = """Score this video hook (the opening narration of a YouTube facts/mystery video) from 0-100 for its ability to stop a scroll and hold attention through the first 30 seconds.
+
+Signals, in descending weight:
+1. First sentence is a specific, arresting claim or image (dates, numbers, names) — not a general setup
+2. A curiosity gap opens immediately — something unexplained that demands resolution
+3. Stakes/consequence are clear — why this matters, what was lost or risked
+4. Sensory immediacy — the viewer can SEE the moment being described
+5. No throat-clearing (greetings, context, definitions before the hook lands)
+6. Momentum — short sentences, active voice, present tense where possible
+7. The framing question feels genuinely unanswered (not rhetorical fluff)
+8. It promises something the video can actually pay off
+
+Hook: "{hook}"
+
+Title for context: "{title}"
+
+Respond with strict JSON only: {{"score": <0-100 integer>, "reason": "<15 words max on the weakest signal>"}}"""
+
+
+def _score_hook(script):
+    """Second-opinion gate: score the hook before a 20+ min render is
+    spent on it. Fails OPEN (75/unscorable) — the gate must never block
+    production on its own API hiccup."""
+    try:
+        r = gemini(VIRALITY_PROMPT.format(
+            hook=script.get("hook", "")[:600],
+            title=script.get("title", "")[:100]))
+        if r.strip().startswith("```"):
+            r = r.split("```")[1]
+            if r.strip().startswith("json"):
+                r = r[4:]
+        d = json.loads(r)
+        return int(d.get("score", 0)), str(d.get("reason", ""))[:120]
+    except Exception as e:
+        comms.log(f"hook scoring failed (gate open): {str(e)[:60]}")
+        return 75, "unscorable"
+
+
 def generate_script(direction=None):
+    """Write one script, then QA the hook: below 70 → one regeneration,
+    keep the better script. Scores are kept in the gist so the future
+    analytics loop can correlate hook style with retention."""
+    best = None
+    best_score = -1
+    for attempt in range(2):
+        script = _write_script(direction)
+        if not script:
+            continue
+        score, reason = _score_hook(script)
+        state.STATE.setdefault("hook_scores", []).append(
+            {"id": script.get("id"), "score": score, "reason": reason})
+        del state.STATE["hook_scores"][:-200]
+        state.save_soon()
+        comms.log(f"hook score {score}: {reason}")
+        if score > best_score:
+            best, best_score = script, score
+        if score >= 70:
+            return script  # good enough — skip the second attempt
+    return best
+
+
+def _write_script(direction=None):
     direction = direction or state.STATE.get("topic_direction") or (
         "unsolved mysteries, strange science, history they never taught you")
     used = ", ".join(state.STATE.get("used_topics", [])[-40:]) or "none yet"

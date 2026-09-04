@@ -8,6 +8,7 @@ Usage:
     python make_thumbnails.py <script.json> [video.mp4]
 """
 
+import io
 import json
 import sys
 from pathlib import Path
@@ -49,28 +50,67 @@ def wrap(draw, text, font, max_w):
     return lines
 
 
-def _background(video_path):
-    """A dramatic frame from the video (2/3 in — past any fade-in),
-    darkened and desaturated so the text pops. Falls back to paper."""
-    if not video_path or not Path(video_path).exists():
-        return Image.new("RGB", (W, H), PAPER), False
-    try:
-        from moviepy import VideoFileClip
-        src = VideoFileClip(str(video_path))
-        t = min(src.duration * 0.66, max(src.duration - 0.5, 0))
-        frame = src.get_frame(t)
-        src.close()
-        img = Image.fromarray(frame).resize((W, H)).convert("RGB")
-        img = ImageEnhance.Brightness(img).enhance(0.45)   # darken
-        img = ImageEnhance.Color(img).enhance(0.55)        # desaturate
-        return img, True
-    except Exception as e:
-        log.warning("frame background failed (%s) — paper fallback", e)
-        return Image.new("RGB", (W, H), PAPER), False
+def _pollinations_bg(script):
+    """AI background via Pollinations (free, no watermark, live-tested
+    ~3s/image, 1024x576 — upscaled to 1280x720). Deterministic seed from
+    the script id so a re-render regenerates the same art. Falls back to
+    None on any failure (caller uses the video frame or paper)."""
+    import urllib.parse
+    import urllib.request
+    kws = []
+    for s in script.get("scenes", [])[:3]:
+        kws.extend(s.get("visual_keywords", [])[:1])
+    subject = " ".join(kws[:2]) or script["title"]
+    prompt = (f"dark moody cinematic {subject}, single centered subject, "
+              f"dramatic lighting, film grain, high contrast, no text, "
+              f"no words, no letters")
+    seed = abs(hash(script["id"])) % 999983
+    url = ("https://image.pollinations.ai/prompt/"
+           + urllib.parse.quote(prompt)
+           + f"?width=1280&height=720&seed={seed}&nologo=true")
+    for attempt in (1, 2):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=90) as r:
+                data = r.read()
+            if len(data) < 5000:
+                raise RuntimeError(f"suspiciously small image ({len(data)}B)")
+            img = Image.open(io.BytesIO(data)).convert("RGB")
+            if img.size != (W, H):
+                img = img.resize((W, H), Image.LANCZOS)
+            return img
+        except Exception as e:
+            log.warning("pollinations attempt %d failed: %s", attempt, e)
+    return None
+
+
+def _background(script, video_path):
+    """Background priority: AI art (Pollinations) → a frame from the
+    actual video → paper. Darkened/desaturated so the text pops."""
+    img = _pollinations_bg(script)
+    if img is not None:
+        img = (ImageEnhance.Brightness(img).enhance(0.6)
+               .convert("RGB"))
+        return img, "ai"
+    if video_path and Path(video_path).exists():
+        try:
+            from moviepy import VideoFileClip
+            src = VideoFileClip(str(video_path))
+            t = min(src.duration * 0.66, max(src.duration - 0.5, 0))
+            frame = src.get_frame(t)
+            src.close()
+            img = Image.fromarray(frame).resize((W, H)).convert("RGB")
+            img = ImageEnhance.Brightness(img).enhance(0.45)
+            img = ImageEnhance.Color(img).enhance(0.55)
+            return img, "frame"
+        except Exception as e:
+            log.warning("frame background failed (%s) — paper fallback", e)
+    return Image.new("RGB", (W, H), PAPER), "paper"
 
 
 def make_thumbnail(script, out_path, video_path=None):
-    img, has_bg = _background(video_path)
+    img, bg_kind = _background(script, video_path)
+    has_bg = bg_kind != "paper"
     if has_bg:
         # bottom-third scrim so the title sits on darkness, plus a thin
         # cream border for the editorial frame feel
@@ -117,8 +157,7 @@ def make_thumbnail(script, out_path, video_path=None):
            fill=RED)
 
     img.save(out_path)
-    log.info("thumbnail: %s%s", out_path.name,
-             " (video-frame bg)" if has_bg else " (paper)")
+    log.info("thumbnail: %s (%s bg)", out_path.name, bg_kind)
     return out_path
 
 

@@ -85,7 +85,13 @@ def next_job():
         state.STATE["worker"]["warned_offline"] = False
         comms.send("🖥 PC worker is back online ✅")
     state.save_soon()
-    job = jobs.next_job()
+    # cloud workers pass ?max_cost_minutes=N so jobs too big for their
+    # remaining budget stay queued for the unlimited PC worker
+    try:
+        max_cost = float(request.args.get("max_cost_minutes"))
+    except (TypeError, ValueError):
+        max_cost = None
+    job = jobs.next_job(max_cost_minutes=max_cost)
     return jsonify(job or {})
 
 

@@ -28,11 +28,27 @@ def add_job(jtype, payload):
     return job
 
 
-def next_job():
-    """Claim the oldest pending job for the worker. Re-syncs the queue from
-    the gist first (source of truth), so a job queued by any thread or
-    process is always visible. A job claimed but not reported on for 40
-    minutes goes back to pending (worker crashed)."""
+def _cost_minutes(job):
+    """Rough render-cost estimate in worker-minutes. Narration at ~150wpm
+    -> video duration; MoviePy+motion encodes at ~13x realtime on an
+    Actions runner. Cloud workers use this to skip jobs that can't fit
+    their remaining budget — the PC worker (no deadline) takes those."""
+    if job.get("type") != "render":
+        return 1
+    script = job.get("script") or {}
+    words = len(script.get("hook", "").split())
+    words += sum(len(s.get("narration", "").split())
+                 for s in script.get("scenes", []))
+    words += len(script.get("outro", "").split())
+    duration_min = words / 150
+    return duration_min * 13 + 3  # +3 for TTS/downloads/warmup
+
+
+def next_job(max_cost_minutes=None):
+    """Claim the oldest pending job the caller can afford. Re-syncs the
+    queue from the gist first (source of truth), so a job queued by any
+    thread or process is always visible. A job claimed but not reported
+    on for 40 minutes goes back to pending (worker crashed)."""
     state.reload_jobs()
     now = time.time()
     for job in state.STATE["jobs"]:
@@ -41,11 +57,15 @@ def next_job():
             job["updated"] = now
             state.save_now()
     for job in state.STATE["jobs"]:
-        if job["status"] == "pending":
-            job["status"] = "claimed"
-            job["updated"] = now
-            state.save_now()  # immediate — two pollers can't both get it
-            return job
+        if job["status"] != "pending":
+            continue
+        if (max_cost_minutes is not None
+                and _cost_minutes(job) > max_cost_minutes):
+            continue  # too big for this caller — leave it for the PC
+        job["status"] = "claimed"
+        job["updated"] = now
+        state.save_now()  # immediate — two pollers can't both get it
+        return job
     return None
 
 

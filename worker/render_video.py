@@ -180,9 +180,12 @@ def render_from_dict(script, config):
     durations = {k: AudioFileClip(str(mp3)).duration for k, (mp3, _) in audio.items()}
 
     outputs = []
+    blocks_long = []  # long-form scene order, for the description chapters
     for fmt, w, h in [("short", rconf["short_width"], rconf["short_height"]),
                       ("long", rconf["long_width"], rconf["long_height"])]:
         blocks = pick_scenes(script, fmt, durations)
+        if fmt == "long":
+            blocks_long = blocks
         total = sum(durations[bid] for bid, _ in blocks)
 
         # 2) stock clips per unique keyword (both orientations cached)
@@ -272,9 +275,20 @@ def render_from_dict(script, config):
 
     # 4) metadata file for the uploader
     desc = script.get("description", script["hook"])
+    # chapters for the long-form description (YouTube shows them in the
+    # UI and they're a real SEO surface) — pipe-separated because the
+    # metadata parser splits on the FIRST ": " only
+    chapters = []
+    t = 0.0
+    for bid, s in blocks_long:
+        label = "Intro" if bid == "hook" else (
+            " ".join(s.get("narration", "").split()[:6]) + "…")
+        chapters.append(f"{int(t // 60)}:{int(t % 60):02d} {label}")
+        t += durations.get(bid, 0) + 0.35
     meta = (f"title: {script['title']}\n"
             f"description: {desc}\n"
             f"tags: {', '.join(script.get('tags', []))}\n"
+            f"chapters: {'|'.join(chapters)}\n"
             f"id: {sid}\n")
     (REVIEW / f"{sid}_metadata.txt").write_text(meta, encoding="utf-8")
     log.info("done: %s", ", ".join(p.name for p in outputs))

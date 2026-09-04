@@ -147,16 +147,19 @@ def do_render(job):
 
 def _enrich_meta(script, meta):
     """Growth: build a full YouTube description from the script — hook
-    first (search-result text), context, hashtags, channel branding —
-    and merge tag lists. A 2-line description wastes YouTube's biggest
-    search surface."""
+    first (search-result text), context, hashtags, chapters, channel
+    branding — and merge tag lists. A 2-line description wastes
+    YouTube's biggest search surface."""
     desc = meta.get("description", "") or script.get("description", "")
     conf = CFG.get("channel", {})
     hashtags = conf.get("hashtags", "")
     name = conf.get("name", "")
-    # ensure the topic hashtags from the script's description survive,
-    # plus the channel's standing set, without duplicating lines
+    # chapters come from the renderer as pipe-separated "M:SS Label" entries
+    chapters = [c.strip() for c in meta.pop("chapters", "").split("|")
+                if c.strip()]
     parts = [p for p in (desc.strip(), hashtags.strip()) if p]
+    if chapters:
+        parts.append("TIMESTAMPS\n" + "\n".join(chapters))
     if name:
         parts.append(f"Subscribe to {name} for the details everyone else skipped.")
     meta["description"] = "\n\n".join(dict.fromkeys(parts))

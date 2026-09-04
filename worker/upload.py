@@ -67,6 +67,35 @@ def set_thumbnail(video_url, thumb_path, config=None):
                         media_body=str(thumb_path)).execute()
 
 
+def make_public(video_url):
+    """Flip a private upload to public (used when the owner taps ✅ —
+    the video is already safely on YouTube by then)."""
+    yt = get_service()
+    video_id = video_url.rstrip("/").split("/")[-1]
+    v = yt.videos().list(part="status", id=video_id).execute()
+    if not v.get("items"):
+        raise RuntimeError(f"video {video_id} not found")
+    status = v["items"][0]["status"]
+    status["privacyStatus"] = "public"
+    status.pop("publishAt", None)  # a schedule is meaningless once public
+    yt.videos().update(part="status", body={
+        "id": video_id, "status": status}).execute()
+
+
+def delete_video(video_url):
+    """Delete an uploaded video (the owner's ❌ on an already-uploaded
+    preview). Returns True if it was deleted or already gone."""
+    yt = get_service()
+    video_id = video_url.rstrip("/").split("/")[-1]
+    try:
+        yt.videos().delete(id=video_id).execute()
+        return True
+    except Exception:
+        # already deleted (double-tap) — check existence
+        v = yt.videos().list(part="id", id=video_id).execute()
+        return not v.get("items")
+
+
 def parse_metadata(meta_path):
     meta = {}
     for line in meta_path.read_text(encoding="utf-8").splitlines():

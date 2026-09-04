@@ -53,8 +53,10 @@ def brain_report(payload):
 # telegram direct send (video previews with approval buttons)
 # ---------------------------------------------------------------------------
 
-def send_video_preview(path, approval_id, title, wait_min=None):
-    """Send the rendered file to Telegram with ✅/❌ buttons."""
+def send_video_preview(path, approval_id, title, url=""):
+    """Send the rendered file to Telegram with ✅/❌ buttons. The video
+    is ALREADY uploaded (private) — ✅ makes it public, ❌ deletes it.
+    There is no time limit on the decision."""
     api = f"https://api.telegram.org/bot{CFG['agent']['bot_token']}"
     chat = CFG["agent"]["chat_id"]
     kb = {"inline_keyboard": [[
@@ -63,12 +65,11 @@ def send_video_preview(path, approval_id, title, wait_min=None):
     ]]}
     is_short = "_short" in path.name
     caption = (f"🎬 <b>{_esc(title)}</b>\n"
-               f"{'Short (vertical)' if is_short else 'Long-form'} — "
-               f"watch, then decide. ✅ publishes as scheduled at the "
-               f"best hour; ❌ deletes it.")
-    if wait_min:
-        caption += (f"\n⏱ I'm waiting ~{wait_min} min for your decision "
-                    f"— the files exist only on this machine.")
+               f"{'Short (vertical)' if is_short else 'Long-form'}\n"
+               f"⚡ Already uploaded (private) — no time limit. "
+               f"✅ makes it public; ❌ deletes it. ")
+    if url:
+        caption += f"<a href=\"{_esc(url)}\">Watch it</a>."
     with open(path, "rb") as f:
         r = requests.post(
             f"{api}/sendDocument" if path.stat().st_size > 10 << 20
@@ -98,109 +99,51 @@ def _esc(s):
 # ---------------------------------------------------------------------------
 
 def do_render(job):
+    """Render, upload IMMEDIATELY as private+scheduled, then preview in
+    Telegram with ✅/❌ buttons that flip it public / delete it — hours or
+    days later, no time window. The video is already safely on YouTube
+    before the owner is ever asked, so nothing can be lost to a runner
+    dying or a worker restart."""
     import render_video
     from make_thumbnails import make_thumbnail
     script = job["script"]
     sid = script["id"]
     log.info("render job: %s", sid)
-    outputs = render_video.render_from_dict(script, CFG)
+    render_video.render_from_dict(script, CFG)
     make_thumbnail(script, REVIEW / f"{sid}_thumb.png")
     short = REVIEW / f"{sid}_short.mp4"
     long_v = REVIEW / f"{sid}_long.mp4"
     meta = REVIEW / f"{sid}_metadata.txt"
     approval_id = job.get("approval_id", job["id"])
+    hour = job.get("publish_hour", 17)
+
+    # upload right away — private + scheduled, never instant-public
+    up = _upload_files(script, sid, hour)
+    if up.get("video_url"):
+        _cleanup_files(sid)  # published; local intermediates no longer needed
 
     # preview into Telegram (short is small enough to send fully)
     sent = False
     if short.exists():
-        # register the pending video BEFORE the preview so the brain can
-        # answer our approval polls (the report only arrives at the end)
-        _register_pending(approval_id, script, sid, short, long_v, meta)
         sent = send_video_preview(short, approval_id, script["title"],
-                                  wait_min=_approval_wait_minutes())
+                                  url=up.get("video_url"))
         if long_v.exists() and long_v.stat().st_size < 45 << 20:
             # send long-form too, same approval buttons
-            send_video_preview(long_v, approval_id, script["title"])
+            send_video_preview(long_v, approval_id, script["title"],
+                               url=up.get("video_url"))
 
     result = {
         "ok": True,
         "title": script["title"],
-        "files": {
-            "short": str(short) if short.exists() else "",
-            "long": str(long_v) if long_v.exists() else "",
-            "meta": str(meta) if meta.exists() else "",
-            "thumb": str(REVIEW / f"{sid}_thumb.png")
-                     if (REVIEW / f"{sid}_thumb.png").exists() else "",
-        },
-        "msg": "rendered" + ("" if sent else " (telegram preview failed)"),
+        "video_url": up.get("video_url", ""),
+        "uploaded": bool(up.get("video_url")),
+        "msg": up.get("msg", "rendered"),
     }
-
-    # upload-on-approval, same machine, same job. If auto-approve is on
-    # OR the owner taps ✅ during our approval window, we upload right
-    # here — the files exist only on THIS machine, so no other worker
-    # could ever fulfill an upload job for them.
-    if sent and _approval(approval_id):
-        result["uploaded"] = True
-        result.update(_upload_files(script, sid, job.get("publish_hour", 17)))
-        _cleanup_files(sid)
-    elif sent:
-        result["msg"] += (f" — approve within {_approval_wait_minutes()} "
-                          f"min (files on this machine only; after that the "
-                          f"next render re-creates them)")
+    if not up.get("video_url"):
+        # upload failed (e.g. dead token) — keep files for a retry and say so
+        result["msg"] = (f"rendered but upload FAILED: {up.get('msg', '?')} "
+                         f"— files kept locally for retry")
     return result
-
-
-def _register_pending(approval_id, script, sid, short, long_v, meta):
-    """Tell the brain this video is awaiting approval NOW (not at report
-    time) so /approval-status can answer the worker's polls while the
-    owner is still watching the preview."""
-    try:
-        requests.post(
-            CFG["agent"]["url"].rstrip("/") + "/register-pending",
-            json={"approval_id": approval_id, "title": script["title"],
-                  "job_id": sid,
-                  "files": {
-                      "short": str(short) if short.exists() else "",
-                      "long": str(long_v) if long_v.exists() else "",
-                      "meta": str(meta) if meta.exists() else "",
-                      "thumb": str(REVIEW / f"{sid}_thumb.png")
-                               if (REVIEW / f"{sid}_thumb.png").exists() else "",
-                  }},
-            headers={"X-Worker-Secret": CFG["agent"]["secret"]},
-            timeout=30)
-    except Exception as e:
-        log.warning("register-pending failed (approval wait disabled): %s", e)
-
-
-def _approval_wait_minutes():
-    """How long this worker waits for the owner's ✅ after sending the
-    preview. On the cloud (deadline set) we wait only as long as the
-    budget safely allows; on the PC we can wait longer."""
-    if deadline:
-        return max(1, int((deadline - time.time() - 5 * 60) / 60))
-    return 10
-
-
-def _approval(approval_id, poll_s=5):
-    """Poll the brain until the owner approves (v) or rejects (vx) the
-    video, or the wait window closes. Auto-approve counts as approval."""
-    waited = 0
-    wait_min = _approval_wait_minutes()
-    while waited < wait_min * 60:
-        try:
-            r = brain_get(f"/approval-status?id={approval_id}")
-            status = r.get("status")
-            if status == "approved":
-                return True
-            if status == "rejected":
-                return False
-            if status == "waiting" and r.get("auto_approve"):
-                return True
-        except Exception:
-            pass  # brain briefly unreachable — keep waiting
-        time.sleep(poll_s)
-        waited += poll_s
-    return False
 
 
 def _upload_files(script, sid, hour):

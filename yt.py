@@ -141,3 +141,30 @@ def reply_to_comment(comment_id, text):
             "textOriginal": text,
         }
     }).execute()
+
+
+def make_public(video_url):
+    """Flip a private upload to public (owner's ✅ on an upload-first
+    preview — the video already sits safely on YouTube)."""
+    yt = get_service()
+    video_id = video_url.rstrip("/").split("/")[-1]
+    v = yt.videos().list(part="status", id=video_id).execute()
+    if not v.get("items"):
+        raise RuntimeError(f"video {video_id} not found")
+    status = v["items"][0]["status"]
+    status["privacyStatus"] = "public"
+    status.pop("publishAt", None)  # a schedule is meaningless once public
+    yt.videos().update(part="status", body={
+        "id": video_id, "status": status}).execute()
+
+
+def delete_video(video_url):
+    """Delete an uploaded video (owner's ❌). True if deleted or gone."""
+    yt = get_service()
+    video_id = video_url.rstrip("/").split("/")[-1]
+    try:
+        yt.videos().delete(id=video_id).execute()
+        return True
+    except Exception:
+        v = yt.videos().list(part="id", id=video_id).execute()
+        return not v.get("items")

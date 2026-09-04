@@ -11,8 +11,8 @@ import requests
 import comms
 import config
 
-GEMINI_MODELS = ["gemini-flash-latest", "gemini-3.1-flash-lite",
-                 "gemini-flash-lite-latest"]
+GEMINI_MODELS = ["gemini-flash-latest", "gemini-3.5-flash-lite",
+                 "gemini-3.1-flash-lite", "gemini-flash-lite-latest"]
 
 
 def _gemini(prompt, system, max_tokens):

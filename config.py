@@ -14,10 +14,14 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 # Optional fallbacks (both free tiers) — used automatically when Gemini is down
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")  # console.groq.com
-GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+# gpt-oss-120b: the free-plan workhorse (old Llama chat models
+# went enterprise-only on Groq's free tier)
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")  # openrouter.ai
+# glm-5.2:free — frontier-class, 256K ctx, 50 req/day free (verified
+# Sept 2026; free models rotate — check openrouter.ai/models when stale)
 OPENROUTER_MODEL = os.environ.get(
-    "OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
+    "OPENROUTER_MODEL", "z-ai/glm-5.2:free")
 
 # YouTube: refresh token + client from the one-time extract_refresh_token.py run
 YT_REFRESH_TOKEN = os.environ.get("YT_REFRESH_TOKEN", "")

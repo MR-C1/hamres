@@ -58,15 +58,50 @@ def _pixabay_search(keyword, api_key, orientation, per_page):
     return r.json().get("hits", [])
 
 
+def _fmt_mb(n):
+    return f"{n / (1 << 20):.1f}MB"
+
+
+def _fmt_eta(seconds):
+    if seconds != seconds or seconds == float("inf"):  # nan/inf guard
+        return "?"
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    return f"{int(seconds // 60)}m{seconds % 60:02.0f}s"
+
+
 def _download(url, dest):
     if dest.exists():
         return dest
     log.info("download: %s -> %s", url.split("?")[0][-60:], dest.name)
+    t0 = time.monotonic()
+    last_log = t0
+    done = 0
     with requests.get(url, stream=True, timeout=120) as r:
         r.raise_for_status()
+        total = int(r.headers.get("Content-Length") or 0)
         with open(dest, "wb") as f:
             for chunk in r.iter_content(chunk_size=1 << 16):
                 f.write(chunk)
+                done += len(chunk)
+                now = time.monotonic()
+                # progress line at most once per second
+                if now - last_log >= 1 and total:
+                    speed = done / (now - t0)  # bytes/sec (average so far)
+                    pct = done / total * 100
+                    eta = (total - done) / speed if speed else float("inf")
+                    log.info("  %s/%s (%.0f%%) %.1fMB/s ETA %s — %s",
+                             _fmt_mb(done), _fmt_mb(total), pct,
+                             speed / (1 << 20), _fmt_eta(eta), dest.name)
+                    last_log = now
+    if total and done != total:
+        log.warning("  size mismatch: got %s of %s — %s", _fmt_mb(done),
+                    _fmt_mb(total), dest.name)
+    else:
+        log.info("  done: %s in %.1fs (avg %.1fMB/s) — %s",
+                 _fmt_mb(done), time.monotonic() - t0,
+                 done / max(time.monotonic() - t0, 0.001) / (1 << 20),
+                 dest.name)
     return dest
 
 

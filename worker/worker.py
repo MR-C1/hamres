@@ -12,7 +12,9 @@ Auto:  run_worker.bat registered at logon (see SETUP_AGENT.md)
 """
 
 import json
+import os
 import shutil
+import sys
 import time
 import traceback
 import requests
@@ -174,20 +176,29 @@ def ensure_single_instance():
         try:
             old_pid = int(lock.read_text().strip())
             import psutil
-            if psutil.pid_exists(old_pid):
-                print("worker already running (pid", old_pid, ") — exiting")
-                sys.exit(0)
+            try:
+                proc = psutil.Process(old_pid)
+                # only treat it as OUR lock if the pid is actually a python
+                # process — Windows recycles pids, so a stale lock can point
+                # at an unrelated live process (e.g. VS Code)
+                if proc.name().lower().startswith("python"):
+                    print(f"worker already running (pid {old_pid}) — exiting")
+                    sys.exit(0)
+            except psutil.NoSuchProcess:
+                pass  # stale lock — take over
         except (ValueError, ImportError):
-            pass  # stale/corrupt lock or psutil missing — take over
-    import os
+            pass  # corrupt lock or psutil missing — take over
     lock.write_text(str(os.getpid()))
     return lock
 
 
 def main():
     global CFG
+    # MoviePy writes its temp audio files to the CWD — make sure that's the
+    # PC dir no matter how we were launched (logon autostart CWDs to System32,
+    # which gives ffmpeg Permission denied)
+    os.chdir(Path(__file__).resolve().parent)
     ensure_single_instance()
-    import os
     deadline = (time.time() + float(os.environ.get("WORKER_MAX_MINUTES", 0)) * 60
                 if os.environ.get("WORKER_MAX_MINUTES") else None)
     CFG = load_config()
@@ -209,7 +220,8 @@ def main():
                 try:
                     result = HANDLERS[job["type"]](job)
                 except Exception as e:
-                    traceback.print_exc()
+                    log.error("job %s crashed:\n%s", job["id"],
+                              traceback.format_exc())
                     result = {"ok": False, "msg": f"{type(e).__name__}: {e}"}
                 brain_report({"job_id": job["id"], **result})
                 log.info("job %s -> %s", job["id"],
@@ -228,7 +240,7 @@ def main():
         except requests.RequestException as e:
             log.warning("brain unreachable: %s", str(e)[:100])
         except Exception as e:
-            traceback.print_exc()
+            log.error("poll loop crashed:\n%s", traceback.format_exc())
         if deadline and time.time() > deadline:
             log.info("run time limit reached — exiting cleanly")
             break

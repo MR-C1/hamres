@@ -209,6 +209,7 @@ def render_from_dict(script, config):
         final.write_videofile(
             str(out_path), codec="libx264", audio_codec="aac",
             fps=rconf.get("fps", 30), preset="medium", threads=4,
+            temp_audiofile_path=str(REVIEW),  # temp audio next to output, not CWD
             logger=None)
         outputs.append(out_path)
 

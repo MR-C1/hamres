@@ -20,9 +20,11 @@ def _gemini(prompt, system, max_tokens):
     client = genai.Client(api_key=config.GEMINI_API_KEY)
     for model in GEMINI_MODELS:
         try:
+            cfg = {"max_output_tokens": max_tokens}
+            if system:
+                cfg["system_instruction"] = system
             r = client.models.generate_content(
-                model=model, contents=prompt,
-                config={"system_instruction": system} if system else None)
+                model=model, contents=prompt, config=cfg)
             text = (r.text or "").strip()
             if text:
                 return text
@@ -53,8 +55,12 @@ def _openai_compatible(base, key, model, prompt, system, max_tokens):
     return content.strip()
 
 
-def complete(prompt, system=None, max_tokens=2000):
-    """Try Gemini, then Groq, then OpenRouter. Raises only if all fail."""
+def complete(prompt, system=None, max_tokens=8000):
+    """Try Gemini, then Groq, then OpenRouter. Raises only if all fail.
+    Default 8000 output tokens: full scripts (10-14 scenes, ~1,800
+    words of narration as JSON) need ~3,000 tokens — the old 2,000
+    default silently squeezed them down to 4-scene stubs on fallback
+    providers."""
     errors = []
 
     if config.GEMINI_API_KEY:

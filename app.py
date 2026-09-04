@@ -84,7 +84,7 @@ def next_job():
     state.STATE["worker"]["last_seen"] = datetime.utcnow().isoformat()
     if state.STATE["worker"].get("warned_offline"):
         state.STATE["worker"]["warned_offline"] = False
-        comms.send("🖥 PC worker is back online ✅")
+        comms.send("✅ Worker back in contact.")
     state.save_soon()
     # cloud workers pass ?max_cost_minutes=N so jobs too big for their
     # remaining budget stay queued for the unlimited PC worker

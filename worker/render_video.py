@@ -36,6 +36,29 @@ def fit(clip, w, h):
                                     width=w, height=h)])
 
 
+def _loudnorm(path):
+    """Normalize to YouTube's loudness target (-16 LUFS) with a
+    stream-copy pass: video bytes untouched, only the audio track
+    re-encoded — costs seconds, not minutes. MoviePy 2.1.2 has no
+    audio-filter hook on write_videofile (audio_ffmpeg_params does not
+    exist — that TypeError killed every render), so this runs after."""
+    import subprocess
+    import imageio_ffmpeg
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    tmp = path.with_suffix(".norm.mp4")
+    r = subprocess.run(
+        [ffmpeg, "-y", "-v", "error", "-i", str(path),
+         "-c:v", "copy", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
+         "-c:a", "aac", "-b:a", "192k", str(tmp)],
+        capture_output=True, text=True, timeout=1800)
+    if r.returncode == 0 and tmp.exists() and tmp.stat().st_size > 1000:
+        tmp.replace(path)
+    else:
+        log.warning("loudnorm pass failed (keeping original): %s",
+                    r.stderr.strip()[:120])
+        tmp.unlink(missing_ok=True)
+
+
 def _render_valid(path):
     """A finished render is worth keeping only if it fully decodes —
     MoviePy killed mid-write leaves a truncated mp4 that still opens.
@@ -288,11 +311,8 @@ def render_from_dict(script, config):
             str(out_path), codec="libx264", audio_codec="aac",
             fps=rconf.get("fps", 30), preset="medium", threads=4,
             temp_audiofile_path=str(REVIEW),  # temp audio next to output, not CWD
-            # normalize to YouTube's loudness target — raw TTS+music mixes
-            # vary by several dB between videos
-            audio_ffmpeg_params=["-af",
-                                 "loudnorm=I=-16:TP=-1.5:LRA=11"],
             logger=None)
+        _loudnorm(out_path)  # YouTube's loudness target, audio-only pass
         outputs.append(out_path)
 
         # free memory between formats

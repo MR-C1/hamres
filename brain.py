@@ -161,6 +161,12 @@ def _write_script(direction=None):
         script = json.loads(text)
         if "id" not in script or "scenes" not in script:
             raise ValueError("missing keys")
+        # a mini-doc needs its acts — a 4-scene stub means the provider
+        # squeezed the script (token cap or lazy compliance). Reject and
+        # retry rather than render a 90-second "long-form"
+        if len(script["scenes"]) < 8:
+            raise ValueError(f"too few scenes ({len(script['scenes'])}) "
+                             f"for the 8-12 min format")
         return script
     except Exception as e:
         comms.log(f"script parse failed: {e}")

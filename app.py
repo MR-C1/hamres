@@ -33,8 +33,9 @@ HELP_HTML = """🎬 <b>Channel Agent</b> — your 24/7 YouTube growth manager
 /status — system health + job queue
 /stats — live channel numbers
 /next — queue a new video right now
-/clear — empty the job queue (/clear failed keeps the rest)
+/clear — empty the job queue (/clear all also drops pending approvals)
 /publish — publish every pending rendered video
+/reset — reset the approval counter to 0/10, auto-approve off
 /report — today's growth report
 /idea &lt;topic&gt; — draft a script on a topic
 /settings — show / change settings
@@ -46,9 +47,9 @@ video be about?", "how close am I to monetization?" ("publish" alone also
 publishes.)
 
 I check comments every few hours, report stats each morning, learn which
-topics grow the channel, and keep videos queued. A worker renders them and
-sends previews here — tap ✅ within ~10 min to publish (the files live on
-the rendering machine only).
+topics grow the channel, and keep videos queued. A cloud worker renders
+them, uploads them privately, and sends previews here — tap ✅ to make a
+video public or ❌ to delete it, whenever you like (no time limit).
 """
 
 
@@ -440,21 +441,44 @@ def cmd_publish(_):
 
 
 def cmd_clear(args):
-    """Clear the job queue: /clear (all jobs) or /clear failed."""
+    """Clear the job queue: /clear (jobs), /clear failed (keep the rest),
+    /clear all (also drop pending approvals — videos stay private on
+    YouTube, untouched)."""
     state.default_state()
     state.reload_jobs()
+    arg = args.strip().lower()
     before = len(state.STATE["jobs"])
-    if args.strip().lower() == "failed":
+    if arg == "failed":
         state.STATE["jobs"] = [j for j in state.STATE["jobs"]
                                if j.get("status") != "failed"]
         what = "failed jobs"
     else:
         state.STATE["jobs"] = []
         what = "entire queue"
+    note = ""
+    if arg == "all":
+        n = len(state.STATE["pending_videos"])
+        state.STATE["pending_videos"] = {}
+        note = (f" Dropped {n} pending approval{'s' if n != 1 else ''} "
+                f"(videos stay private on YouTube — publish or delete "
+                f"them in YouTube Studio).")
     state.save_now()
     comms.send(f"🧹 Cleared the {what} ({before} → "
-               f"{len(state.STATE['jobs'])} jobs remain). /next queues a "
-               f"fresh video.", html=True)
+               f"{len(state.STATE['jobs'])} jobs remain).{note} /next "
+               f"queues a fresh video.", html=True)
+
+
+def cmd_reset_approvals(_):
+    """Reset the approval trust counter to 0 and turn auto-approve off."""
+    state.default_state()
+    s = state.STATE["settings"]
+    was = s.get("approved_count", 0)
+    s["approved_count"] = 0
+    s["auto_approve"] = False
+    state.save_now()
+    comms.send(f"🔄 Approval counter reset ({was} → 0/10). Auto-approve is "
+               f"OFF — every video needs your ✅ until 10 real approvals "
+               f"accumulate.", html=True)
 
 
 COMMANDS = {
@@ -470,6 +494,8 @@ COMMANDS = {
     "diag": cmd_diag,
     "publish": cmd_publish,
     "clear": cmd_clear,
+    "reset": cmd_reset_approvals,
+    "reset-approvals": cmd_reset_approvals,
 }
 
 

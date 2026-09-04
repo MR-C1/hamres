@@ -51,10 +51,10 @@ def wrap(draw, text, font, max_w):
 
 
 def _pollinations_bg(script):
-    """AI background via Pollinations (free, no watermark, live-tested
-    ~3s/image, 1024x576 — upscaled to 1280x720). Deterministic seed from
-    the script id so a re-render regenerates the same art. Falls back to
-    None on any failure (caller uses the video frame or paper)."""
+    """AI background via Pollinations (free). Registered "seed" tier
+    (POLLINATIONS_TOKEN env var) gives 3x the rate, standard models,
+    and watermark removal; anonymous still works as fallback."""
+    import os
     import urllib.parse
     import urllib.request
     kws = []
@@ -65,9 +65,12 @@ def _pollinations_bg(script):
               f"dramatic lighting, film grain, high contrast, no text, "
               f"no words, no letters")
     seed = abs(hash(script["id"])) % 999983
+    token = os.environ.get("POLLINATIONS_TOKEN", "")
     url = ("https://image.pollinations.ai/prompt/"
            + urllib.parse.quote(prompt)
            + f"?width=1280&height=720&seed={seed}&nologo=true")
+    if token:
+        url += f"&token={urllib.parse.quote(token)}"
     for attempt in (1, 2):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})

@@ -42,6 +42,7 @@ jobs:
           CHAT_ID: ${{ secrets.CHAT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_TOKEN: ${{ secrets.YT_TOKEN }}
+          POLLINATIONS_TOKEN: ${{ secrets.POLLINATIONS_TOKEN }}
         run: |
           cat > worker/config.yaml <<EOF
           channel:

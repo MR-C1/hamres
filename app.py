@@ -84,6 +84,55 @@ def next_job():
     return jsonify(job or {})
 
 
+@app.route("/approval-status")
+def approval_status():
+    """The rendering worker polls this while waiting for the owner's ✅.
+    The worker uploads the video itself, in-session — an upload JOB would
+    be useless cross-machine (the files only exist on the renderer)."""
+    if not config.WORKER_SECRET or request.headers.get("X-Worker-Secret") != config.WORKER_SECRET:
+        return jsonify({"error": "unauthorized"}), 403
+    state.default_state()
+    approval_id = request.args.get("id", "")
+    p = state.STATE["pending_videos"].get(approval_id)
+    if p is None:
+        # not pending: either already handled (approved→uploaded /
+        # rejected) or never registered — report "gone" so the worker
+        # stops waiting
+        return jsonify({"status": "gone"})
+    # a worker is actively waiting on this decision (affects the ✅ reply)
+    p["worker_waiting"] = True
+    state.save_soon()
+    # an explicit decision stored by the ✅/❌ handler
+    if p.get("decision") == "approved":
+        return jsonify({"status": "approved"})
+    if p.get("decision") == "rejected":
+        return jsonify({"status": "rejected"})
+    # no explicit decision yet: auto-approve decides immediately
+    if state.STATE["settings"].get("auto_approve"):
+        return jsonify({"status": "waiting", "auto_approve": True})
+    return jsonify({"status": "waiting"})
+
+
+@app.route("/register-pending", methods=["POST"])
+def register_pending():
+    """Worker calls this right BEFORE sending the Telegram preview, so
+    approval polls during the wait window can be answered. The render
+    report refreshes this entry later — the worker is the source."""
+    if not config.WORKER_SECRET or request.headers.get("X-Worker-Secret") != config.WORKER_SECRET:
+        return jsonify({"error": "unauthorized"}), 403
+    state.default_state()
+    data = request.get_json(force=True, silent=True) or {}
+    approval_id = data.get("approval_id", "")
+    if approval_id:
+        state.STATE["pending_videos"][approval_id] = {
+            "title": data.get("title", ""),
+            "paths": data.get("files", {}),
+            "job_id": data.get("job_id", ""),
+        }
+        state.save_soon()
+    return jsonify({"ok": True})
+
+
 @app.route("/report", methods=["POST"])
 def report():
     if not config.WORKER_SECRET or request.headers.get("X-Worker-Secret") != config.WORKER_SECRET:
@@ -96,43 +145,74 @@ def report():
 
     if job and job["type"] == "render" and ok:
         # worker already sent the video preview to Telegram with buttons
-        # v:<approval_id> / vx:<approval_id> — remember its context
-        state.STATE["pending_videos"][job.get("approval_id", job_id)] = {
-            "title": data.get("title", ""),
-            "paths": data.get("files", {}),
-            "job_id": job_id,
-        }
-        state.save_soon()
-        s = state.STATE["settings"]
-        if s.get("auto_approve"):
-            _queue_upload(job.get("approval_id", job_id),
-                          note="auto-approved")
+        # v:<approval_id> / vx:<approval_id>. If it uploaded in-session
+        # (owner approved during the wait window), just announce it and
+        # keep the pending entry gone. Otherwise refresh the entry so a
+        # later decision is still recorded for stats/next-run handling.
+        approval_id = job.get("approval_id", job_id)
+        if data.get("uploaded"):
+            state.STATE["pending_videos"].pop(approval_id, None)
+            state.save_soon()
+            comms.send(f"📤 <b>Uploaded</b> — "
+                       f"{comms.esc(data.get('title', 'video'))}\n"
+                       f"{comms.esc(data.get('video_url', ''))}", html=True)
+        else:
+            state.STATE["pending_videos"][approval_id] = {
+                "title": data.get("title", ""),
+                "paths": data.get("files", {}),
+                "job_id": job_id,
+            }
+            state.save_soon()
     elif job and job["type"] == "upload" and ok:
         comms.send(f"📤 <b>Uploaded</b> — {comms.esc(data.get('title', 'video'))}\n"
                    f"{comms.esc(data.get('video_url', ''))}", html=True)
+    elif not ok and job is None:
+        # job aged out of the bounded list — nothing to update, but the
+        # failure is still worth surfacing
+        comms.send(f"⚠️ <b>Job failed</b> (unknown/old job "
+                   f"<code>{comms.esc(job_id)}</code>)\n"
+                   f"{comms.esc(data.get('msg', ''))[:400]}", html=True)
     elif not ok:
         comms.send(f"⚠️ <b>Job failed</b> (<code>{comms.esc(job['type'])}</code>)\n"
                    f"{comms.esc(data.get('msg', ''))[:400]}", html=True)
     return jsonify({"ok": True})
 
 
-def _queue_upload(approval_id, note=""):
+def _record_decision(approval_id, decision, note=""):
+    """Store the owner's ✅/❌ decision on a pending video. The worker
+    that rendered the video polls /approval-status and uploads it itself
+    in-session — files only exist on the rendering machine, so a queued
+    upload job could never be fulfilled cross-machine. If no worker is
+    waiting anymore (window closed), we say so honestly."""
     p = state.STATE["pending_videos"].get(approval_id)
     if not p:
-        return
-    hour = brain.learn_best_hour()
-    jobs.add_job("upload", {
-        "approval_id": approval_id,
-        "paths": p["paths"],
-        "meta": {"title": p["title"]},
-        "publish_hour": hour,
-    })
-    import cloud
-    cloud.wake_soon("upload")  # wake the cloud runner to do the upload
-    state.STATE["pending_videos"].pop(approval_id, None)
+        return "Already handled — no pending video by that id."
+    if p.get("decision"):
+        return "Already decided."  # double-tap / redelivery — no-op
+    p["decision"] = decision
+    if decision == "approved":
+        # trust counter: one increment per video, first decision only
+        s = state.STATE["settings"]
+        s["approved_count"] = s.get("approved_count", 0) + 1
+        count = s["approved_count"]
+        after = s.get("auto_approve_after", 10)
+        if not s.get("auto_approve") and count >= after:
+            s["auto_approve"] = True
+            comms.send(f"🤖 <b>Auto-approve enabled</b> — {count} approvals "
+                       f"earned my trust. New videos will publish themselves; "
+                       f"comment replies still need your ✅.", html=True)
     state.save_soon()
-    comms.send(f"📤 Queued upload of {comms.esc(p['title'][:60])} "
-               f"({note or 'approved'}) — will publish at {hour}:00.", html=True)
+    if decision == "approved":
+        if p.get("worker_waiting"):
+            comms.send(f"📤 <b>Approved</b> — uploading now "
+                       f"({comms.esc(p['title'][:60])}).", html=True)
+        else:
+            comms.send(f"📤 <b>Approved</b> — but the worker's approval window "
+                       f"closed ({comms.esc(p['title'][:60])}). It'll re-render "
+                       f"on the next run and upload then.", html=True)
+    else:
+        comms.send("🗑 Video discarded — files will be cleaned up.")
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -146,23 +226,10 @@ def handle_callback(cb):
     comms.answer_callback(cid)
     action, _, uid = data.partition(":")
 
-    if action == "v":      # approve video → queue upload
-        state.STATE["settings"]["approved_count"] += 1
-        count = state.STATE["settings"]["approved_count"]
-        after = state.STATE["settings"]["auto_approve_after"]
-        if (not state.STATE["settings"]["auto_approve"]
-                and count >= after):
-            state.STATE["settings"]["auto_approve"] = True
-            comms.send(f"🤖 <b>Auto-approve enabled</b> — {count} approvals "
-                       f"earned my trust. New videos will publish themselves; "
-                       f"comment replies still need your ✅.", html=True)
-        _queue_upload(uid)
-    elif action == "vx":   # reject video → clean up on PC
-        p = state.STATE["pending_videos"].pop(uid, None)
-        if p:
-            jobs.add_job("cleanup", {"paths": list(p.get("paths", {}).values())})
-            state.save_soon()
-        comms.send("🗑 Video discarded.")
+    if action == "v":      # approve video → record decision
+        _record_decision(uid, "approved")
+    elif action == "vx":   # reject video → record decision
+        _record_decision(uid, "rejected")
     elif action == "r":
         comms.send(brain.post_reply(uid))
     elif action == "rx":
@@ -331,16 +398,20 @@ def _is_publish_intent(text):
 
 
 def _publish_pending():
-    """Queue uploads for every rendered-but-unapproved video."""
+    """Record an approve decision for every rendered-but-unapproved
+    video. The waiting worker picks it up and uploads in-session."""
     pending = state.STATE["pending_videos"]
-    if not pending:
-        comms.send("Nothing to publish — no rendered videos awaiting "
-                   "approval. Render one with /next, then tap ✅ on the "
-                   "preview, or say 'publish' once it's rendered.")
+    undecided = {uid: p for uid, p in pending.items() if not p.get("decision")}
+    if not undecided:
+        if pending:
+            comms.send("Every pending video is already decided.")
+        else:
+            comms.send("Nothing to publish — no rendered videos awaiting "
+                       "approval. Render one with /next, then tap ✅ on the "
+                       "preview, or say 'publish' once it's rendered.")
         return
-    for uid in list(pending):
-        state.STATE["settings"]["approved_count"] += 1
-        _queue_upload(uid, note="published via chat")
+    for uid in undecided:
+        _record_decision(uid, "approved")
 
 
 def chat_reply(text):

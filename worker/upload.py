@@ -27,24 +27,44 @@ def get_service():
     from googleapiclient.discovery import build
 
     secret = ROOT / "client_secret.json"
-    if not secret.exists():
+    if not secret.exists() or not secret.read_text(encoding="utf-8").strip():
         raise FileNotFoundError(
-            "client_secret.json not found. Follow the Google Cloud steps in "
-            "START_HERE.md (enable YouTube Data API v3, create OAuth Desktop "
-            "client, download the JSON here).")
+            "client_secret.json not found or empty. Follow the Google Cloud "
+            "steps in START_HERE.md (enable YouTube Data API v3, create OAuth "
+            "Desktop client, download the JSON here).")
 
     token_path = ROOT / "token.json"
     creds = None
     if token_path.exists():
         creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(str(secret), SCOPES)
-            creds = flow.run_local_server(port=0)
+    if creds and creds.valid:
+        return build("youtube", "v3", credentials=creds)
+    if creds and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
         token_path.write_text(creds.to_json(), encoding="utf-8")
+        return build("youtube", "v3", credentials=creds)
+    # no usable token: the interactive browser flow only works on a
+    # desktop with a human — on a headless runner it would hang forever
+    # waiting for a browser that can't open, burning the whole job window
+    import os
+    if os.environ.get("WORKER_MAX_MINUTES"):
+        raise RuntimeError(
+            "YouTube token missing/unrefreshable and no browser available "
+            "on this headless runner — regenerate token.json on the PC and "
+            "update the YT_TOKEN secret.")
+    flow = InstalledAppFlow.from_client_secrets_file(str(secret), SCOPES)
+    creds = flow.run_local_server(port=0)
+    token_path.write_text(creds.to_json(), encoding="utf-8")
     return build("youtube", "v3", credentials=creds)
+
+
+def set_thumbnail(video_url, thumb_path, config=None):
+    """Attach a custom thumbnail to an uploaded video (long-form only —
+    Shorts ignore thumbnails)."""
+    yt = get_service()
+    video_id = video_url.rstrip("/").split("/")[-1]
+    yt.thumbnails().set(videoId=video_id,
+                        media_body=str(thumb_path)).execute()
 
 
 def parse_metadata(meta_path):

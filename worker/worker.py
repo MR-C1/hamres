@@ -11,7 +11,6 @@ Run:   .venv\\Scripts\\python worker.py        (keep this window open)
 Auto:  run_worker.bat registered at logon (see SETUP_AGENT.md)
 """
 
-import json
 import os
 import shutil
 import sys
@@ -26,6 +25,7 @@ from common import REVIEW, load_config, setup_logging
 log = setup_logging("worker")
 
 CFG = None
+deadline = None  # wall-clock run limit (cloud mode); None on the PC
 
 
 # ---------------------------------------------------------------------------
@@ -53,7 +53,7 @@ def brain_report(payload):
 # telegram direct send (video previews with approval buttons)
 # ---------------------------------------------------------------------------
 
-def send_video_preview(path, approval_id, title):
+def send_video_preview(path, approval_id, title, wait_min=None):
     """Send the rendered file to Telegram with ✅/❌ buttons."""
     api = f"https://api.telegram.org/bot{CFG['agent']['bot_token']}"
     chat = CFG["agent"]["chat_id"]
@@ -62,10 +62,13 @@ def send_video_preview(path, approval_id, title):
         {"text": "❌ Discard", "callback_data": f"vx:{approval_id}"},
     ]]}
     is_short = "_short" in path.name
-    caption = (f"🎬 <b>{title}</b>\n"
+    caption = (f"🎬 <b>{_esc(title)}</b>\n"
                f"{'Short (vertical)' if is_short else 'Long-form'} — "
                f"watch, then decide. ✅ publishes as scheduled at the "
                f"best hour; ❌ deletes it.")
+    if wait_min:
+        caption += (f"\n⏱ I'm waiting ~{wait_min} min for your decision "
+                    f"— the files exist only on this machine.")
     with open(path, "rb") as f:
         r = requests.post(
             f"{api}/sendDocument" if path.stat().st_size > 10 << 20
@@ -83,6 +86,13 @@ def send_video_preview(path, approval_id, title):
     return r.json().get("ok", False)
 
 
+def _esc(s):
+    """HTML-escape for Telegram captions — an LLM-written title with
+    < or & would make Telegram reject the whole preview message."""
+    return (s.replace("&", "&amp;").replace("<", "&lt;")
+             .replace(">", "&gt;"))
+
+
 # ---------------------------------------------------------------------------
 # job execution
 # ---------------------------------------------------------------------------
@@ -98,52 +108,154 @@ def do_render(job):
     short = REVIEW / f"{sid}_short.mp4"
     long_v = REVIEW / f"{sid}_long.mp4"
     meta = REVIEW / f"{sid}_metadata.txt"
+    approval_id = job.get("approval_id", job["id"])
 
     # preview into Telegram (short is small enough to send fully)
     sent = False
     if short.exists():
-        sent = send_video_preview(short, job.get("approval_id", job["id"]),
-                                  script["title"])
+        # register the pending video BEFORE the preview so the brain can
+        # answer our approval polls (the report only arrives at the end)
+        _register_pending(approval_id, script, sid, short, long_v, meta)
+        sent = send_video_preview(short, approval_id, script["title"],
+                                  wait_min=_approval_wait_minutes())
         if long_v.exists() and long_v.stat().st_size < 45 << 20:
             # send long-form too, same approval buttons
-            send_video_preview(long_v, job.get("approval_id", job["id"]),
-                               script["title"])
-    return {
+            send_video_preview(long_v, approval_id, script["title"])
+
+    result = {
         "ok": True,
         "title": script["title"],
         "files": {
             "short": str(short) if short.exists() else "",
             "long": str(long_v) if long_v.exists() else "",
             "meta": str(meta) if meta.exists() else "",
-            "thumb": str(REVIEW / f"{sid}_thumb.png"),
+            "thumb": str(REVIEW / f"{sid}_thumb.png")
+                     if (REVIEW / f"{sid}_thumb.png").exists() else "",
         },
         "msg": "rendered" + ("" if sent else " (telegram preview failed)"),
     }
 
+    # upload-on-approval, same machine, same job. If auto-approve is on
+    # OR the owner taps ✅ during our approval window, we upload right
+    # here — the files exist only on THIS machine, so no other worker
+    # could ever fulfill an upload job for them.
+    if sent and _approval(approval_id):
+        result["uploaded"] = True
+        result.update(_upload_files(script, sid, job.get("publish_hour", 17)))
+        _cleanup_files(sid)
+    elif sent:
+        result["msg"] += (f" — approve within {_approval_wait_minutes()} "
+                          f"min (files on this machine only; after that the "
+                          f"next render re-creates them)")
+    return result
 
-def do_upload(job):
+
+def _register_pending(approval_id, script, sid, short, long_v, meta):
+    """Tell the brain this video is awaiting approval NOW (not at report
+    time) so /approval-status can answer the worker's polls while the
+    owner is still watching the preview."""
+    try:
+        requests.post(
+            CFG["agent"]["url"].rstrip("/") + "/register-pending",
+            json={"approval_id": approval_id, "title": script["title"],
+                  "job_id": sid,
+                  "files": {
+                      "short": str(short) if short.exists() else "",
+                      "long": str(long_v) if long_v.exists() else "",
+                      "meta": str(meta) if meta.exists() else "",
+                      "thumb": str(REVIEW / f"{sid}_thumb.png")
+                               if (REVIEW / f"{sid}_thumb.png").exists() else "",
+                  }},
+            headers={"X-Worker-Secret": CFG["agent"]["secret"]},
+            timeout=30)
+    except Exception as e:
+        log.warning("register-pending failed (approval wait disabled): %s", e)
+
+
+def _approval_wait_minutes():
+    """How long this worker waits for the owner's ✅ after sending the
+    preview. On the cloud (deadline set) we wait only as long as the
+    budget safely allows; on the PC we can wait longer."""
+    if deadline:
+        return max(1, int((deadline - time.time() - 5 * 60) / 60))
+    return 10
+
+
+def _approval(approval_id, poll_s=5):
+    """Poll the brain until the owner approves (v) or rejects (vx) the
+    video, or the wait window closes. Auto-approve counts as approval."""
+    waited = 0
+    wait_min = _approval_wait_minutes()
+    while waited < wait_min * 60:
+        try:
+            r = brain_get(f"/approval-status?id={approval_id}")
+            status = r.get("status")
+            if status == "approved":
+                return True
+            if status == "rejected":
+                return False
+            if status == "waiting" and r.get("auto_approve"):
+                return True
+        except Exception:
+            pass  # brain briefly unreachable — keep waiting
+        time.sleep(poll_s)
+        waited += poll_s
+    return False
+
+
+def _upload_files(script, sid, hour):
     import upload
-    paths = job.get("paths", {})
-    hour = job.get("publish_hour", 17)
-    meta = {"title": job.get("meta", {}).get("title", ""),
-            "description": "", "tags": ""}
-    # enrich metadata from the meta file if present
-    if paths.get("meta") and Path(paths["meta"]).exists():
-        parsed = upload.parse_metadata(Path(paths["meta"]))
+    meta = {"title": script["title"],
+            "description": script.get("description", ""),
+            "tags": ", ".join(script.get("tags", []))}
+    meta_path = REVIEW / f"{sid}_metadata.txt"
+    if meta_path.exists():
+        parsed = upload.parse_metadata(meta_path)
         meta.update({k: v for k, v in parsed.items() if v})
 
     results = []
-    for key in ("short", "long"):
-        f = paths.get(key)
-        if f and Path(f).exists():
-            url = upload.upload_video(Path(f), meta, CFG, publish_hour=hour)
-            results.append(url)
-            log.info("uploaded %s -> %s", f, url)
-    return {"ok": bool(results), "video_url": results[0] if results else "",
+    for name in (f"{sid}_short.mp4", f"{sid}_long.mp4"):
+        f = REVIEW / name
+        if not f.exists():
+            continue
+        url = upload.upload_video(f, meta, CFG, publish_hour=hour)
+        results.append(url)
+        log.info("uploaded %s -> %s", f.name, url)
+        # custom thumbnail on the long-form only (Shorts ignore it)
+        if url and name.endswith("_long.mp4"):
+            thumb = REVIEW / f"{sid}_thumb.png"
+            if thumb.exists():
+                try:
+                    upload.set_thumbnail(url, thumb, CFG)
+                    log.info("thumbnail set for %s", name)
+                except Exception as e:
+                    log.warning("thumbnail failed: %s", e)
+    return {"video_url": results[0] if results else "",
+            "title": script["title"] if results else "",
             "msg": "; ".join(results)}
 
 
+def _cleanup_files(sid):
+    """Remove a published video's intermediates so review/ never fills
+    the disk. Keep the files on reject — owner may want another look."""
+    removed = 0
+    for pattern in (f"{sid}_short.mp4", f"{sid}_long.mp4",
+                    f"{sid}_metadata.txt", f"{sid}_thumb.png",
+                    f"{sid}_shortTEMP_MPY_wvf_snd.*",
+                    f"{sid}_longTEMP_MPY_wvf_snd.*"):
+        for p in REVIEW.glob(pattern):
+            try:
+                p.unlink()
+                removed += 1
+            except Exception:
+                pass
+    if removed:
+        log.info("cleaned %d files for %s", removed, sid)
+
+
 def do_cleanup(job):
+    """Legacy remote-cleanup jobs (paths from another machine never
+    resolve — cleanup now happens in-render on the same machine)."""
     removed = []
     for p in job.get("paths", []):
         if p and Path(p).exists():
@@ -152,7 +264,7 @@ def do_cleanup(job):
     return {"ok": True, "msg": f"removed {len(removed)} files"}
 
 
-HANDLERS = {"render": do_render, "upload": do_upload, "cleanup": do_cleanup}
+HANDLERS = {"render": do_render, "cleanup": do_cleanup}
 
 
 def guard_disk():
@@ -193,7 +305,7 @@ def ensure_single_instance():
 
 
 def main():
-    global CFG
+    global CFG, deadline
     # MoviePy writes its temp audio files to the CWD — make sure that's the
     # PC dir no matter how we were launched (logon autostart CWDs to System32,
     # which gives ffmpeg Permission denied)
@@ -227,6 +339,13 @@ def main():
                 log.info("job %s -> %s", job["id"],
                          "ok" if result.get("ok") else "FAILED")
                 empty_polls = 0
+            elif job:
+                # unknown job type — report the mismatch instead of
+                # leaving it claimed forever
+                log.warning("job %s has unknown type %r — failing it",
+                            job.get("id"), job.get("type"))
+                brain_report({"job_id": job.get("id"), "ok": False,
+                              "msg": f"unknown job type: {job.get('type')!r}"})
             else:
                 empty_polls += 1
                 if empty_polls % 5 == 1:  # heartbeat every ~5 min

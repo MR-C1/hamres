@@ -178,7 +178,7 @@ Respond with just the analysis and direction, no preamble.""")
     if guidance:
         state.STATE["topic_direction"] = guidance
         state.save_soon()
-        comms.send_md(f"🧠 <b>Growth analysis</b>\n\n{guidance}", html=True)
+        comms.send_md(f"🧠 **Growth analysis**\n\n{guidance}")
     queue_next_video(1)
 
 
@@ -329,7 +329,6 @@ def weekly_summary():
         f"1000 subs for monetization. Give 3 concise strategic priorities "
         f"for next week. Under 120 words.")
     comms.send_md(
-        f"📈 <b>Weekly summary</b>\n"
+        f"📈 **Weekly summary**\n"
         f"Subs: +{gained} (now {latest['subs']:,}) • Views: +{views_gained:,}\n"
-        f"Monetization progress: {latest['subs']}/1000\n\n{summary or ''}",
-        html=True)
+        f"Monetization progress: {latest['subs']}/1000\n\n{summary or ''}")

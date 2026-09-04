@@ -37,6 +37,7 @@ LOADED = False  # saves are blocked until the real state has been loaded
 
 _gist_id = None
 _gist_id_lock = threading.Lock()
+_save_lock = threading.Lock()  # serializes dump+PATCH (and reload merge)
 _timer = None
 _timer_lock = threading.Lock()
 
@@ -56,36 +57,52 @@ def _find_gist():
 
 
 def load():
-    """Fill STATE from the gist. Sets LOADED even on failure so a bad
-    gist can't deadlock saves forever."""
-    global LOADED
-    try:
-        if not config.GIST_TOKEN:
-            print("[state] GIST_TOKEN not set — memory-only mode")
-            return
-        global _gist_id
-        _gist_id = _find_gist()
-        if not _gist_id:
-            print("[state] no gist yet — created on first save")
-            return
-        r = requests.get(f"https://api.github.com/gists/{_gist_id}",
-                         headers=_headers(), timeout=15)
-        r.raise_for_status()
-        content = r.json()["files"][GIST_FILE].get("content") or "{}"
-        STATE.update(json.loads(content))
-        print(f"[state] restored {len(STATE)} keys from gist")
-    except Exception as e:
-        print("[state] load failed:", e)
-    finally:
+    """Fill STATE from the gist.
+
+    On a TRANSIENT failure (GitHub 5xx, timeout) we retry a few times and
+    must NOT mark saves as allowed — otherwise the first save would patch
+    the real gist with near-empty default state, permanently wiping jobs,
+    stats, and approvals. Only mark LOADED when we genuinely have state:
+    loaded OK, no gist exists yet (first boot), or no token (memory-only).
+    """
+    global LOADED, _gist_id
+    if not config.GIST_TOKEN:
+        print("[state] GIST_TOKEN not set — memory-only mode")
         LOADED = True
+        return
+    import time as _time
+    for attempt in range(4):
+        try:
+            _gist_id = _find_gist()
+            if not _gist_id:
+                print("[state] no gist yet — created on first save")
+                LOADED = True  # nothing to lose
+                return
+            r = requests.get(f"https://api.github.com/gists/{_gist_id}",
+                             headers=_headers(), timeout=15)
+            r.raise_for_status()
+            content = r.json()["files"][GIST_FILE].get("content") or "{}"
+            STATE.update(json.loads(content))
+            print(f"[state] restored {len(STATE)} keys from gist")
+            LOADED = True
+            return
+        except Exception as e:
+            print(f"[state] load attempt {attempt + 1} failed: {e}")
+            _time.sleep(2 * (attempt + 1))
+    # All retries failed: run memory-only and DO NOT save — writing
+    # defaults over the real gist would destroy all persistent state.
+    # The dyno will restart within hours and try again.
+    print("[state] load failed after retries — memory-only, saves disabled")
 
 
 def reload_jobs():
-    """Pull just the jobs list fresh from the gist — the queue's source of
-    truth. Protects against any divergence between background threads and
-    request handlers (multi-process quirks on Render)."""
+    """Pull just the jobs list fresh from the gist, then MERGE into the
+    local list rather than replacing it — replacing could discard a job
+    that another thread appended between our read and the assignment.
+    The gist copy wins for jobs we don't have locally (same id); local
+    wins for anything the gist can't know about yet."""
     global _gist_id
-    if not config.GIST_TOKEN:
+    if not config.GIST_TOKEN or not LOADED:
         return
     try:
         with _gist_id_lock:
@@ -98,7 +115,13 @@ def reload_jobs():
                          headers=_headers(), timeout=10)
         r.raise_for_status()
         content = r.json()["files"][GIST_FILE].get("content") or "{}"
-        STATE["jobs"] = json.loads(content).get("jobs", STATE["jobs"])
+        remote = json.loads(content).get("jobs", [])
+        with _save_lock:
+            local_by_id = {j.get("id"): j for j in STATE["jobs"]}
+            for job in remote:
+                local_by_id.setdefault(job.get("id"), job)
+            STATE["jobs"] = [local_by_id[j.get("id")] for j in remote
+                             if j.get("id") in local_by_id]
     except Exception as e:
         print("[state] reload_jobs failed:", e)
 
@@ -113,25 +136,30 @@ def _dump():
 
 
 def save_now():
+    """Serialize the whole dump+PATCH under one lock so two threads can't
+    interleave reads/writes and clobber each other's snapshot."""
     global _gist_id
     if not config.GIST_TOKEN or not LOADED:
         return  # never write before the real state is loaded (restart race)
-    content = _dump()
-    with _gist_id_lock:
-        if _gist_id is None:
-            _gist_id = _find_gist()
-        if _gist_id:
-            r = requests.patch(
-                f"https://api.github.com/gists/{_gist_id}",
-                headers=_headers(),
-                json={"files": {GIST_FILE: {"content": content}}}, timeout=15)
-        else:
-            r = requests.post(
-                "https://api.github.com/gists", headers=_headers(),
-                json={"description": GIST_DESC,
-                      "files": {GIST_FILE: {"content": content}}}, timeout=15)
-            if r.ok:
-                _gist_id = r.json()["id"]
+    with _save_lock:
+        content = _dump()
+        with _gist_id_lock:
+            if _gist_id is None:
+                _gist_id = _find_gist()
+            if _gist_id:
+                r = requests.patch(
+                    f"https://api.github.com/gists/{_gist_id}",
+                    headers=_headers(),
+                    json={"files": {GIST_FILE: {"content": content}}},
+                    timeout=15)
+            else:
+                r = requests.post(
+                    "https://api.github.com/gists", headers=_headers(),
+                    json={"description": GIST_DESC,
+                          "files": {GIST_FILE: {"content": content}}},
+                    timeout=15)
+                if r.ok:
+                    _gist_id = r.json()["id"]
     r.raise_for_status()
 
 

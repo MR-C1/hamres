@@ -148,15 +148,23 @@ def _fmt_eta(seconds):
 
 def _download(url, dest):
     if dest.exists():
-        return dest
+        # cached — but only if a previous completed download marked it
+        # good; a file left by a killed run is a truncated clip that
+        # would be reused forever (partial files are indistinguishable
+        # from complete ones by name alone)
+        ok_marker = dest.with_suffix(".ok")
+        if ok_marker.exists():
+            return dest
+        dest.unlink()  # unverified/stale — re-download
     log.info("download: %s -> %s", url.split("?")[0][-60:], dest.name)
     t0 = time.monotonic()
     last_log = t0
     done = 0
+    tmp = dest.with_suffix(".part")
     with requests.get(url, stream=True, timeout=120) as r:
         r.raise_for_status()
         total = int(r.headers.get("Content-Length") or 0)
-        with open(dest, "wb") as f:
+        with open(tmp, "wb") as f:
             for chunk in r.iter_content(chunk_size=1 << 16):
                 f.write(chunk)
                 done += len(chunk)
@@ -171,13 +179,16 @@ def _download(url, dest):
                              speed / (1 << 20), _fmt_eta(eta), dest.name)
                     last_log = now
     if total and done != total:
-        log.warning("  size mismatch: got %s of %s — %s", _fmt_mb(done),
-                    _fmt_mb(total), dest.name)
-    else:
-        log.info("  done: %s in %.1fs (avg %.1fMB/s) — %s",
-                 _fmt_mb(done), time.monotonic() - t0,
-                 done / max(time.monotonic() - t0, 0.001) / (1 << 20),
-                 dest.name)
+        log.warning("  size mismatch: got %s of %s — discarding %s",
+                    _fmt_mb(done), _fmt_mb(total), dest.name)
+        tmp.unlink(missing_ok=True)
+        return None
+    tmp.replace(dest)
+    dest.with_suffix(".ok").write_text(str(done))
+    log.info("  done: %s in %.1fs (avg %.1fMB/s) — %s",
+             _fmt_mb(done), time.monotonic() - t0,
+             done / max(time.monotonic() - t0, 0.001) / (1 << 20),
+             dest.name)
     return dest
 
 
@@ -188,7 +199,10 @@ def fetch_clips(keyword, orientation="landscape", api_keys=None, max_clips=6):
     d = _cache_dir(keyword)
     marker = d / "done.json"
     if marker.exists():
-        clips = sorted(p for p in d.glob("*.mp4"))
+        # only verified-complete clips count (the .ok sidecar is written
+        # when a download finished and matched Content-Length)
+        clips = sorted(p for p in d.glob("*.mp4")
+                       if p.with_suffix(".ok").exists())
         if clips:
             return clips[:max_clips]
 

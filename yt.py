@@ -37,7 +37,8 @@ def get_service():
 def channel_stats():
     """Channel-level numbers: subscribers, views, video count."""
     yt = get_service()
-    r = yt.channels().list(part="snippet,statistics", mine=True).execute()
+    r = yt.channels().list(
+        part="snippet,statistics,contentDetails", mine=True).execute()
     items = r.get("items", [])
     if not items:
         return None
@@ -48,7 +49,10 @@ def channel_stats():
         "subs": int(st.get("subscriberCount", 0)),
         "views": int(st.get("viewCount", 0)),
         "videos": int(st.get("videoCount", 0)),
-        "uploads_playlist": c["contentDetails"]["relatedPlaylists"]["uploads"],
+        # uploads playlist — some channels hide it, so .get() not []
+        "uploads_playlist": (c.get("contentDetails", {})
+                             .get("relatedPlaylists", {})
+                             .get("uploads", "")),
     }
 
 

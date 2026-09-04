@@ -6,6 +6,7 @@ scheduler, slash commands, and approval buttons. Intelligence lives in
 brain.py; YouTube access in yt.py; jobs in jobs.py.
 """
 
+import re
 import threading
 import time
 from datetime import datetime
@@ -289,6 +290,11 @@ def cmd_diag(_):
                html=True)
 
 
+def cmd_publish(_):
+    """Publish rendered-but-unapproved videos (same as saying 'publish')."""
+    _publish_pending()
+
+
 COMMANDS = {
     "help": cmd_help, "start": cmd_help,
     "status": cmd_status,
@@ -300,11 +306,47 @@ COMMANDS = {
     "resume": cmd_resume,
     "settings": cmd_settings,
     "diag": cmd_diag,
+    "publish": cmd_publish,
 }
 
 
+PUBLISH_WORDS = {"publish", "upload", "release"}
+
+
+def _is_publish_intent(text):
+    """True for 'publish', 'ok publish now', 'please upload' etc. — any
+    short chat message whose words are essentially a publish command.
+    Longer sentences with real content still go to Gemini."""
+    words = re.findall(r"[a-z]+", text.lower())
+    return (bool(words) and len(words) <= 6
+            and any(w in PUBLISH_WORDS for w in words)
+            and all(w in PUBLISH_WORDS or w in {"ok", "now", "please",
+                                                "the", "video", "it", "go",
+                                                "yes", "do", "just"}
+                    for w in words))
+
+
+def _publish_pending():
+    """Queue uploads for every rendered-but-unapproved video."""
+    pending = state.STATE["pending_videos"]
+    if not pending:
+        comms.send("Nothing to publish — no rendered videos awaiting "
+                   "approval. Render one with /next, then tap ✅ on the "
+                   "preview, or say 'publish' once it's rendered.")
+        return
+    for uid in list(pending):
+        state.STATE["settings"]["approved_count"] += 1
+        _queue_upload(uid, note="published via chat")
+
+
 def chat_reply(text):
-    """Free text → Gemini with channel context."""
+    """Free text → Gemini with channel context. Publish-intent phrases
+    are handled as real commands instead (the LLM only talks, it can't
+    actually publish anything)."""
+    if _is_publish_intent(text):
+        state.default_state()
+        _publish_pending()
+        return
     comms.typing()
     ctx = ""
     try:

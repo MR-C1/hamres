@@ -94,6 +94,105 @@ def gradient_clip(duration, w, h, label=""):
     return ImageClip(str(p)).with_duration(duration)
 
 
+def _asterisk_mark(size, alpha=140):
+    """The brand asterisk as a transparent PNG (cream, semi-opaque) for
+    the corner watermark on every frame. Cached."""
+    import math
+    from PIL import Image, ImageDraw
+    p = CACHE / f"mark_{size}_{alpha}.png"
+    if p.exists():
+        return p
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    cx = cy = size // 2
+    r, width = int(size * 0.34), max(4, int(size * 0.11))
+    color = (250, 246, 238, alpha)
+    for i in range(6):
+        a = i * (2 * math.pi / 6) - math.pi / 2
+        x1, y1 = cx + r * math.cos(a), cy + r * math.sin(a)
+        d.line([(cx, cy), (x1, y1)], fill=color, width=width)
+        cap = width // 2 - 1
+        d.ellipse([x1 - cap, y1 - cap, x1 + cap, y1 + cap], fill=color)
+    d.ellipse([cx - width // 2 + 1, cy - width // 2 + 1,
+               cx + width // 2 - 1, cy + width // 2 - 1], fill=color)
+    img.save(p)
+    return p
+
+
+def _source_card(text, w):
+    """A small translucent citation card: 'SOURCE · <text>'. The on-screen
+    citation is the anti-slop differentiator — it says 'a human curated
+    this' better than any disclaimer."""
+    import hashlib
+    from PIL import Image, ImageDraw, ImageFont
+    from captions import _font
+    key = hashlib.md5(f"{text}|{w}".encode()).hexdigest()[:12]
+    p = CACHE / f"srccard_{key}.png"
+    if p.exists():
+        return p
+    fs = max(16, int(w * 0.018))
+    font = _font(fs)
+    label = f"SOURCE · {text}"
+    tmp = Image.new("RGBA", (10, 10))
+    td = ImageDraw.Draw(tmp)
+    tw = td.textbbox((0, 0), label, font=font)[2]
+    img = Image.new("RGBA", (tw + fs * 2, fs * 3), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle([0, 0, img.width - 1, img.height - 1],
+                        radius=fs // 2, fill=(20, 20, 30, 175))
+    d.text((fs, fs // 2 + 2), label, font=font, fill=(250, 246, 238, 235))
+    img.save(p)
+    return p
+
+
+def _end_card(w, h):
+    """Branded 12s end card (long-form only): ink field, cream asterisk,
+    wordmark, red tagline, subscribe line. Shorts loop instead — no end
+    card on them."""
+    import hashlib
+    from PIL import Image, ImageDraw, ImageFont
+    key = hashlib.md5(f"{w}x{h}".encode()).hexdigest()[:10]
+    p = CACHE / f"endcard_{key}.png"
+    if p.exists():
+        return p
+
+    def f(sz):
+        for path in (r"C:\Windows\Fonts\ariblk.ttf",
+                     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"):
+            if Path(path).exists():
+                return ImageFont.truetype(path, sz)
+        return ImageFont.load_default()
+
+    img = Image.new("RGB", (w, h), (20, 20, 30))
+    d = ImageDraw.Draw(img)
+    import math
+    # faint oversized asterisk backdrop
+    cx, cy, r, wd = w // 2, h // 2, int(h * 0.52), int(h * 0.16)
+    for i in range(6):
+        a = i * (2 * math.pi / 6) - math.pi / 2
+        d.line([(cx, cy), (cx + r * math.cos(a), cy + r * math.sin(a))],
+               fill=(32, 32, 44), width=wd)
+    # crisp cream asterisk mark
+    r2, w2 = int(h * 0.13), int(h * 0.042)
+    cream = (250, 246, 238)
+    for i in range(6):
+        a = i * (2 * math.pi / 6) - math.pi / 2
+        d.line([(cx, cy), (cx + r2 * math.cos(a), cy + r2 * math.sin(a))],
+               fill=cream, width=w2)
+    # wordmark
+    word, fw = "FOOTNOTE", f(int(h * 0.13))
+    tw = d.textbbox((0, 0), word, font=fw)[2]
+    d.text(((w - tw) // 2, h * 0.66), word, font=fw, fill=cream)
+    d.text(((w - tw) // 2 + tw + 6, h * 0.645), "*",
+           font=f(int(h * 0.085)), fill=(178, 24, 24))
+    tag = "the part they skipped"
+    ft = f(int(h * 0.052))
+    tw2 = d.textbbox((0, 0), tag, font=ft)[2]
+    d.text(((w - tw2) // 2, h * 0.84), tag, font=ft, fill=(178, 24, 24))
+    img.save(p)
+    return p
+
+
 def scene_visual(clips, duration, w, h, label="", motion=True):
     """Build the visual track for one scene: stock clips (or gradient).
     With motion=True each segment gets a slow alternating zoom (Ken
@@ -295,7 +394,31 @@ def render_from_dict(script, config):
                        .with_start(t + cs).with_duration(max(ce - cs, 0.15))
                        .with_position(("center", h * 0.66)))
                 video_layers.append(img)
+
+            # source card: on-screen citation for the scene's anchor fact
+            src = (s.get("source") or "").strip()
+            if src:
+                card = _source_card(src[:80], w)
+                cw = ImageClip(str(card)).with_start(t + 0.4).with_duration(
+                    min(4.0, d - 0.5))
+                cw = cw.with_position((int(w * 0.03), int(h * 0.86)))
+                video_layers.append(cw)
             t += d
+
+        # end card (long-form only — Shorts loop instead)
+        if fmt == "long":
+            ec = ImageClip(str(_end_card(w, h))).with_start(t).with_duration(12)
+            video_layers.append(ec)
+            t += 12
+
+        # corner brand mark on every frame: top-right on Shorts (captions
+        # + UI occupy the bottom), bottom-right on long-form
+        mark = ImageClip(str(_asterisk_mark(int(w * 0.045)))).with_start(0
+                    ).with_duration(t)
+        mark = mark.with_position((w - int(w * 0.045) - int(w * 0.025),
+                                   int(h * 0.03) if fmt == "short"
+                                   else h - int(w * 0.045) - int(h * 0.04)))
+        video_layers.append(mark)
 
         final_audio = CompositeAudioClip(audio_clips)
         music = music_track(t, rconf.get("music_volume", 0.08))

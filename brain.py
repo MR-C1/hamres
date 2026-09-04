@@ -44,6 +44,7 @@ SCRIPT_PROMPT = """Write ONE video script for a faceless YouTube facts/mystery c
   "scenes": [
     {{"narration": "90-140 words, conversational, fast, surprising.",
       "visual_keywords": ["2-3 stock-footage search phrases"],
+      "source": "short real citation anchoring this scene's central fact",
       "in_short": true}}
   ],
   "outro": "One-line call to action, max 12 words."
@@ -61,6 +62,13 @@ STRUCTURE (this is a mini-documentary, not a list of facts):
   escalates.
 - Mark the 3 most visual scenes "in_short": true. All facts true, verifiable,
   and specific (dates, numbers, names).
+- SOURCES: at least half the scenes carry a "source" field — a SHORT real
+  citation for that scene's central fact, like "FBI file 49-49395, 1947",
+  "Nature, vol 576, 2019", "Strasbourg city archives". Never fabricate a
+  citation: if unsure of the exact document, cite the institution and year
+  ("Met Office records, 1952"). These appear on screen — they are the
+  channel's credibility device. A scene without a source is fine; a fake
+  source is not.
 
 CRITICAL — visual_keywords decide the stock footage shown during each scene. They are searched on stock-video sites (Pexels), so they must be phrased as searches that RETURN RESULTS there:
 - Describe what the narration literally mentions, in filmable terms: a person,

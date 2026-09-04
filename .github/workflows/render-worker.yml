@@ -42,6 +42,7 @@ jobs:
           cat > worker/config.yaml <<EOF
           channel:
             name: "FOOTNOTE"
+            hashtags: "#mystery #facts"
           keys:
             pexels: "${PEXELS_API_KEY}"
           voice:
@@ -55,7 +56,7 @@ jobs:
             short_width: 1080
             short_height: 1920
             fps: 30
-            caption_max_words: 4
+            caption_max_words: 3
             music_volume: 0.08
             max_clips_per_keyword: 8
           upload:

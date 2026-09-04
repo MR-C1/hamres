@@ -162,7 +162,21 @@ def _enrich_meta(script, meta):
         parts.append("TIMESTAMPS\n" + "\n".join(chapters))
     if name:
         parts.append(f"Subscribe to {name} for the details everyone else skipped.")
-    meta["description"] = "\n\n".join(dict.fromkeys(parts))
+    # YouTube shows at most 3 hashtags above the title and treats excess
+    # or misleading ones as a metadata violation — collect every hashtag
+    # from the text, strip them all, then append exactly the best 3
+    body = "\n\n".join(dict.fromkeys(parts))
+    seen_tags = []
+    for token in body.split():
+        if token.startswith("#") and len(token) > 1 and token not in seen_tags:
+            seen_tags.append(token)
+    # strip hashtags per line, preserving the line/paragraph structure
+    body = "\n".join(
+        " ".join(w for w in line.split() if not w.startswith("#"))
+        for line in body.splitlines()).strip()
+    if seen_tags:
+        body += "\n\n" + " ".join(seen_tags[:3])
+    meta["description"] = body
     # tags: script tags + hashtag words, deduped, YouTube caps at ~500 chars
     tags = [t.strip() for t in meta.get("tags", "").split(",") if t.strip()]
     for word in hashtags.replace("#", "").split():

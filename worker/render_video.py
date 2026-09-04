@@ -119,7 +119,7 @@ def pick_scenes(script, fmt, audio_durations):
         chosen, total = [], 0.0
         for idx, s in enumerate(scenes):
             d = audio_durations.get(f"scene{idx}", 0)
-            if s.get("in_short", True) and (total + d < 42 or not chosen):
+            if s.get("in_short", True) and (total + d < 35 or not chosen):
                 chosen.append((f"scene{idx}", s))
                 total += d
         blocks += chosen
@@ -234,11 +234,11 @@ def render_from_dict(script, config):
             words = json.loads(words_path.read_text(encoding="utf-8"))
             cap_imgs = render_caption_images(
                 f"{sid}_{bid}", words, w, h,
-                rconf.get("caption_max_words", 4))
+                rconf.get("caption_max_words", 3))
             for cs, ce, png in cap_imgs:
                 img = (ImageClip(str(png))
                        .with_start(t + cs).with_duration(max(ce - cs, 0.15))
-                       .with_position(("center", h * 0.72)))
+                       .with_position(("center", h * 0.66)))
                 video_layers.append(img)
             t += d
 

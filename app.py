@@ -213,9 +213,17 @@ def _record_decision(approval_id, decision, note=""):
     waiting anymore (window closed), we say so honestly."""
     p = state.STATE["pending_videos"].get(approval_id)
     if not p:
-        return "Already handled — no pending video by that id."
+        # The video isn't pending: either it was already handled, or the
+        # entry was lost to a restart (worker window closed long ago).
+        # The owner deserves a reply either way — silence makes buttons
+        # look dead.
+        comms.send("🤷 That video isn't awaiting approval anymore — its "
+                   "approval window closed (worker restarted or exited). "
+                   "Ask /next for a fresh one.", html=True)
+        return
     if p.get("decision"):
-        return "Already decided."  # double-tap / redelivery — no-op
+        comms.send("✅ Already decided — one decision per video.")
+        return
     p["decision"] = decision
     if decision == "approved":
         # trust counter: one increment per video, first decision only

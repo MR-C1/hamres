@@ -16,7 +16,11 @@ on:
 jobs:
   render:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    # cloud-only rendering: big jobs (8-12 min videos) need hours, not
+    # minutes — GitHub hosted jobs cap at 6h; requires the repo to be
+    # PUBLIC (unlimited Actions minutes; the private 2,000/month quota
+    # cannot carry ~100-min renders)
+    timeout-minutes: 330
     steps:
       - uses: actions/checkout@v4
 
@@ -75,7 +79,7 @@ jobs:
 
       - name: Run worker (up to 40 minutes)
         env:
-          WORKER_MAX_MINUTES: "40"
+          WORKER_MAX_MINUTES: "300"
         run: python worker/worker.py
 
       - name: Show what happened

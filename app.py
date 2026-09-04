@@ -656,18 +656,19 @@ def scheduler_loop():
                                        lambda: brain.queue_next_video(1)),
                                  daemon=True).start()
 
-        # worker offline watchdog
+        # worker offline watchdog — cloud-only mode: runners poll only
+        # when jobs exist (wake-on-queue + 3 crons), so quiet gaps are
+        # NORMAL. A real problem is no contact for over a day.
         w = state.STATE.get("worker", {})
         if w.get("last_seen") and not w.get("warned_offline"):
             try:
                 seen = datetime.fromisoformat(w["last_seen"])
-                if (datetime.utcnow() - seen).total_seconds() > 7200:
+                if (datetime.utcnow() - seen).total_seconds() > 26 * 3600:
                     w["warned_offline"] = True
                     state.save_soon()
-                    comms.send("🖥 <b>PC worker offline for 2h+</b> — videos "
-                               "can't render until it's back on. (Render "
-                               "brain keeps watching the channel.)",
-                               html=True)
+                    comms.send("⚠️ <b>No worker contact in 26h+</b> — check "
+                               "the GitHub Actions workflow and repo "
+                               "visibility.", html=True)
             except Exception:
                 pass
         time.sleep(60)

@@ -251,8 +251,13 @@ def render_from_dict(script, config):
                 rot = scene_no % len(ordered)
                 ordered = ordered[rot:] + ordered[:rot]
             used_clips.update(c.name for c in ordered[:3])
+            # Ken Burns motion on SHORTS only (where it fights the feed
+            # scroll); long-form keeps static crops + crossfades — the
+            # animated resize costs ~3.4x render time, which turns an
+            # 8-12 min long into a 4-hour cloud job instead of ~1.5h
             visual = scene_visual(ordered, d, w, h,
-                                  label=kws[0] if kws else "")
+                                  label=kws[0] if kws else "",
+                                  motion=(fmt == "short"))
             video_layers.append(visual.with_start(t).with_duration(d))
             audio_clips.append(AudioFileClip(str(mp3)).with_start(t + 0.1))
             scene_no += 1

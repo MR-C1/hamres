@@ -92,7 +92,7 @@ def clear_queue():
     if not config.WORKER_SECRET or request.headers.get("X-Worker-Secret") != config.WORKER_SECRET:
         return jsonify({"error": "unauthorized"}), 403
     state.default_state()
-    jobs.reload_jobs()
+    state.reload_jobs()
     before = len(state.STATE["jobs"])
     only_failed = request.args.get("jobs") == "failed"
     if only_failed:
@@ -396,7 +396,7 @@ def cmd_publish(_):
 def cmd_clear(args):
     """Clear the job queue: /clear (all jobs) or /clear failed."""
     state.default_state()
-    jobs.reload_jobs()
+    state.reload_jobs()
     before = len(state.STATE["jobs"])
     if args.strip().lower() == "failed":
         state.STATE["jobs"] = [j for j in state.STATE["jobs"]

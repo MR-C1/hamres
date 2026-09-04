@@ -99,11 +99,11 @@ def _esc(s):
 # ---------------------------------------------------------------------------
 
 def do_render(job):
-    """Render, upload IMMEDIATELY as private+scheduled, then preview in
-    Telegram with ✅/❌ buttons that flip it public / delete it — hours or
-    days later, no time window. The video is already safely on YouTube
-    before the owner is ever asked, so nothing can be lost to a runner
-    dying or a worker restart."""
+    """Render, upload IMMEDIATELY as private (approval-first), then send
+    the Telegram preview with ✅/❌ buttons that flip it public / delete
+    it — hours or days later, no time window. The video is already
+    safely on YouTube before the owner is ever asked, so nothing can be
+    lost to a runner dying or a worker restart."""
     import render_video
     from make_thumbnails import make_thumbnail
     script = job["script"]
@@ -113,24 +113,20 @@ def do_render(job):
     make_thumbnail(script, REVIEW / f"{sid}_thumb.png")
     short = REVIEW / f"{sid}_short.mp4"
     long_v = REVIEW / f"{sid}_long.mp4"
-    meta = REVIEW / f"{sid}_metadata.txt"
     approval_id = job.get("approval_id", job["id"])
-    hour = job.get("publish_hour", 17)
 
-    # upload right away — private + scheduled, never instant-public
-    up = _upload_files(script, sid, hour)
+    # upload right away — private, NEVER auto-scheduled public (only the
+    # owner's ✅ makes a video public)
+    up = _upload_files(script, sid)
     if up.get("video_url"):
-        _cleanup_files(sid)  # published; local intermediates no longer needed
-
-    # preview into Telegram (short is small enough to send fully)
-    sent = False
-    if short.exists():
         sent = send_video_preview(short, approval_id, script["title"],
                                   url=up.get("video_url"))
         if long_v.exists() and long_v.stat().st_size < 45 << 20:
             # send long-form too, same approval buttons
             send_video_preview(long_v, approval_id, script["title"],
                                url=up.get("video_url"))
+        if sent:
+            _cleanup_files(sid)  # preview sent; intermediates unneeded
 
     result = {
         "ok": True,
@@ -146,7 +142,7 @@ def do_render(job):
     return result
 
 
-def _upload_files(script, sid, hour):
+def _upload_files(script, sid):
     import upload
     meta = {"title": script["title"],
             "description": script.get("description", ""),
@@ -161,7 +157,7 @@ def _upload_files(script, sid, hour):
         f = REVIEW / name
         if not f.exists():
             continue
-        url = upload.upload_video(f, meta, CFG, publish_hour=hour)
+        url = upload.upload_video(f, meta, CFG)
         results.append(url)
         log.info("uploaded %s -> %s", f.name, url)
         # custom thumbnail on the long-form only (Shorts ignore it)

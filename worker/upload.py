@@ -105,10 +105,10 @@ def parse_metadata(meta_path):
     return meta
 
 
-def upload_video(mp4, meta, config, publish_hour=17, privacy=None):
-    """Upload one video file. Private + scheduled at publish_hour by
-    default (never instant-public). Returns the video URL. Used by the
-    agent worker and the run() flow."""
+def upload_video(mp4, meta, config, publish_hour=None, privacy=None):
+    """Upload one video file, PRIVATE with no schedule — approval-first:
+    only the owner's ✅ (brain → yt.make_public) ever makes it public.
+    Returns the video URL. Used by the agent worker and the run() flow."""
     yt = get_service()
     uconf = config.get("upload", {})
     body = {
@@ -123,12 +123,6 @@ def upload_video(mp4, meta, config, publish_hour=17, privacy=None):
             "selfDeclaredMadeForKids": uconf.get("made_for_kids", False),
         },
     }
-    if body["status"]["privacyStatus"] == "private":
-        pub = datetime.now().replace(hour=int(publish_hour), minute=0,
-                                     second=0, microsecond=0)
-        if pub <= datetime.now():
-            pub += timedelta(days=1)
-        body["status"]["publishAt"] = pub.strftime("%Y-%m-%dT%H:%M:%S+06:00")
 
     from googleapiclient.http import MediaFileUpload
     media = MediaFileUpload(str(mp4), chunksize=8 << 20, resumable=True,

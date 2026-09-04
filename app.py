@@ -126,11 +126,13 @@ def report():
     ok = bool(data.get("ok"))
     job = jobs.complete_job(job_id, data)
 
-    if job and job["type"] == "render" and ok:
-        # Upload-first flow: the worker rendered AND uploaded (private)
-        # before reporting. Track the video for the ✅=public / ❌=delete
-        # decision — no time window, the decision is durable in the gist.
-        approval_id = job.get("approval_id", job_id)
+    is_render = (job and job["type"] == "render") or (
+        job is None and data.get("video_url"))
+    # job is None = the job was lost to a restart/race. A render report
+    # with a video_url still matters (a real video sits on YouTube) —
+    # register it for the owner's decision instead of dropping it.
+    if is_render and ok:
+        approval_id = (job or {}).get("approval_id") or job_id
         if data.get("video_url"):
             state.STATE["pending_videos"][approval_id] = {
                 "title": data.get("title", ""),
@@ -138,11 +140,12 @@ def report():
                 "job_id": job_id,
             }
             state.save_soon()
-        # the Telegram preview with ✅/❌ buttons was already sent by the
-        # worker; auto-approve flips it public right here
-        if (data.get("video_url")
-                and state.STATE["settings"].get("auto_approve")):
-            _publish_now(approval_id, note="auto-approved")
+            if state.STATE["settings"].get("auto_approve"):
+                _publish_now(approval_id, note="auto-approved")
+        elif job is None:
+            comms.send(f"⚠️ <b>Render reported for an unknown job</b> "
+                       f"(<code>{comms.esc(job_id)}</code>) — state may have "
+                       f"been lost to a restart.", html=True)
     elif job and job["type"] == "upload" and ok:
         comms.send(f"📤 <b>Uploaded</b> — {comms.esc(data.get('title', 'video'))}\n"
                    f"{comms.esc(data.get('video_url', ''))}", html=True)

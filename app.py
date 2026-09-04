@@ -33,17 +33,22 @@ HELP_HTML = """🎬 <b>Channel Agent</b> — your 24/7 YouTube growth manager
 /status — system health + job queue
 /stats — live channel numbers
 /next — queue a new video right now
+/clear — empty the job queue (/clear failed keeps the rest)
+/publish — publish every pending rendered video
 /report — today's growth report
 /idea &lt;topic&gt; — draft a script on a topic
 /settings — show / change settings
 /pause • /resume — stop or resume auto work
+/diag — test the AI providers
 
 <b>Or just talk to me</b> — "why are views down?", "what should the next
-video be about?", "how close am I to monetization?"
+video be about?", "how close am I to monetization?" ("publish" alone also
+publishes.)
 
 I check comments every few hours, report stats each morning, learn which
-topics grow the channel, and keep videos queued. Your PC renders them and
-sends previews here — tap ✅ to publish.
+topics grow the channel, and keep videos queued. A worker renders them and
+sends previews here — tap ✅ within ~10 min to publish (the files live on
+the rendering machine only).
 """
 
 

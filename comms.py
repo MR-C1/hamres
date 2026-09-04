@@ -106,6 +106,8 @@ COMMAND_MENU = [
     ("status", "System health + queue"),
     ("stats", "Channel growth numbers"),
     ("next", "Render the next video now"),
+    ("clear", "Empty the job queue"),
+    ("publish", "Publish pending videos"),
     ("pause", "Pause auto operations"),
     ("resume", "Resume auto operations"),
     ("settings", "Show settings"),

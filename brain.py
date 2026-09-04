@@ -7,6 +7,7 @@ import re
 from datetime import datetime, timedelta
 
 import comms
+import cloud
 import config
 import jobs
 import llm
@@ -85,6 +86,7 @@ def queue_next_video(n=1, direction=None):
         if not script:
             continue
         job = jobs.add_job("render", {"script": script})
+        cloud.wake_soon("render")  # cloud runner starts within seconds
         state.STATE.setdefault("used_topics", []).append(script.get("id", "?"))
         state.save_soon()
         comms.send(f"🎬 <b>New video queued</b> — {comms.esc(script['title'])}\n"

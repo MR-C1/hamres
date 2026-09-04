@@ -127,6 +127,8 @@ def _queue_upload(approval_id, note=""):
         "meta": {"title": p["title"]},
         "publish_hour": hour,
     })
+    import cloud
+    cloud.wake_soon("upload")  # wake the cloud runner to do the upload
     state.STATE["pending_videos"].pop(approval_id, None)
     state.save_soon()
     comms.send(f"📤 Queued upload of {comms.esc(p['title'][:60])} "
@@ -246,6 +248,8 @@ def cmd_idea(args):
         return
     job = jobs.add_job("render", {"script": script,
                                   "approval_id": job_approval_id()})
+    import cloud
+    cloud.wake_soon("render")
     state.STATE.setdefault("used_topics", []).append(script.get("id", "?"))
     state.save_soon()
     comms.send(f"🎬 Queued: <b>{comms.esc(script['title'])}</b>\n"

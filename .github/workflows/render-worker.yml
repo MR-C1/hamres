@@ -1,12 +1,16 @@
 name: Render Worker
 
-# Cloud render farm: 3x a day, run the video worker for up to 40 minutes.
-# Free tier: ~120 min/day of the 2,000 min/month private-repo quota.
+# Cloud render farm: 3x a day on schedule, PLUS instantly on demand —
+# the brain fires a repository_dispatch ("render-wake") whenever it queues
+# a render job, so the cloud worker starts within seconds instead of
+# waiting for the next cron slot. Also manually runnable from the tab.
 on:
   schedule:
     - cron: "23 3 * * *"
     - cron: "23 11 * * *"
     - cron: "23 19 * * *"   # 01:23 Dhaka time
+  repository_dispatch:       # the brain's instant wake-up call
+    types: [render-wake]
   workflow_dispatch:            # allows manual runs from the Actions tab
 
 jobs:

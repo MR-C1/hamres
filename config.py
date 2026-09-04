@@ -29,6 +29,12 @@ YT_SCOPES = ["https://www.googleapis.com/auth/youtube.force-ssl",
 # gist-backed state (same pattern as hermes-agent)
 GIST_TOKEN = os.environ.get("GIST_TOKEN", "")
 
+# GitHub repo that runs the cloud render worker (agent_repo) — the brain
+# pokes it with repository_dispatch so renders start instantly instead of
+# waiting for the next cron slot. Needs a PAT with repo access.
+GITHUB_REPO = os.environ.get("GITHUB_REPO", "MR-C1/hamres")
+GITHUB_DISPATCH_TOKEN = os.environ.get("GITHUB_DISPATCH_TOKEN", "")
+
 BD_OFFSET = timedelta(hours=6)  # Render's clock is UTC; Bangladesh is UTC+6
 
 CHANNEL_NAME = os.environ.get("CHANNEL_NAME", "Mind Unfold")

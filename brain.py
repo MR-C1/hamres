@@ -43,13 +43,25 @@ SCRIPT_PROMPT = """Write ONE video script for a faceless YouTube facts/mystery c
   "hook": "First 8 seconds of narration. Shocking claim or question. Max 25 words.",
   "scenes": [
     {{"narration": "35-60 words, conversational, fast, surprising.",
-      "visual_keywords": ["2-3 stock-footage search phrases like 'ocean aerial drone'"],
+      "visual_keywords": ["2-3 concrete stock-footage search phrases"],
       "in_short": true}}
   ],
   "outro": "One-line call to action, max 12 words."
 }}
 
 Rules: 7-9 scenes. Mark the 3 most visual scenes "in_short": true. All facts true and verifiable.
+
+CRITICAL — visual_keywords decide the stock footage shown during each scene:
+- Each keyword must DESCRIBE WHAT THE NARRATION LITERALLY MENTIONS in that scene.
+  If the scene says "dancers collapsed in the summer heat", the keywords are
+  "exhausted dancer collapsing" and "medieval street crowd" — NOT "history" or "people".
+- Search phrases must be 2-4 words, concrete and filmable: a person, object,
+  place, or action a camera can point at. Never abstract ("mystery", "time",
+  "history", "science", "facts"), never one word.
+- Prefer era/place specificity: "15th century manuscript pages", not "old book";
+  "Strasbourg medieval street", not "European city".
+- If a concept is abstract, film its concrete consequence instead: for "hysteria
+  spreading" use "panicked crowd running"; for "no explanation" use "empty dark street".
 
 Topic guidance from the channel's growth analysis: {direction}
 Avoid these already-used topics: {used}

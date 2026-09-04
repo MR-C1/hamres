@@ -17,6 +17,82 @@ log = setup_logging("visuals")
 
 CLIPS = CACHE / "clips"
 
+# Generic/abstract terms return random popular footage on Pexels, not
+# scene-matching footage. Map them to concrete, filmable subjects. The
+# keywords from well-written scripts never hit this table.
+GENERIC_KEYWORDS = {
+    # abstractions → their concrete consequence
+    "mystery": "dark abandoned hallway",
+    "mysterious": "dark abandoned hallway",
+    "history": "ancient ruins stones",
+    "historical": "ancient ruins stones",
+    "science": "laboratory microscope closeup",
+    "facts": "library books closeup",
+    "time": "clock hands closeup",
+    "time lapse": "clouds time lapse sky",
+    "strange": "foggy empty street night",
+    "weird": "foggy empty street night",
+    "unknown": "foggy empty road",
+    "unexplained": "foggy empty road",
+    "secret": "locked old door",
+    "hidden": "locked old door",
+    "mystery history": "ancient ruins stones",
+    # vague people/places
+    "people": "crowd walking street",
+    "person": "man standing silhouette",
+    "man": "man standing silhouette",
+    "woman": "woman standing silhouette",
+    "city": "city aerial skyline",
+    "world": "earth from space",
+    "earth": "earth from space",
+    "space": "stars galaxy night sky",
+    "ocean": "ocean waves aerial",
+    "night": "night city lights",
+    "day": "sunny sky clouds",
+    "old": "antique object closeup",
+    "ancient": "ancient ruins stones",
+    "story": "old book pages turning",
+    "book": "old book pages turning",
+    "death": "candle burning dark",
+    "died": "candle burning dark",
+    "illness": "person lying bed sick",
+    "doctor": "doctor hospital corridor",
+    "food": "food closeup table",
+    "animal": "wild animal closeup",
+    "water": "river flowing closeup",
+    "fire": "fire flames closeup",
+    "dark": "dark forest night",
+    "light": "sun rays through window",
+    "video": "film camera reel",
+    "money": "cash bills closeup",
+    "war": "soldiers marching historical",
+    "music": "orchestra playing instruments",
+    "dance": "people dancing crowd",
+    "dancing": "people dancing crowd",
+    "study": "researcher writing notes",
+    "research": "laboratory microscope closeup",
+    "brain": "human brain anatomy 3d",
+    "mind": "human brain anatomy 3d",
+    "body": "human anatomy 3d render",
+    "eye": "human eye macro closeup",
+    "hand": "human hand closeup macro",
+    "face": "human face closeup portrait",
+}
+
+
+def _concrete(keyword):
+    """Translate a generic keyword into a concrete filmable search.
+    Two-word+ keywords that aren't in the table pass through — the script
+    prompt already pushes Gemini toward specific phrases."""
+    k = keyword.strip().lower()
+    if k in GENERIC_KEYWORDS:
+        return GENERIC_KEYWORDS[k]
+    words = k.split()
+    # one generic word alone ("history", "people") → expand
+    if len(words) == 1 and words[0] in GENERIC_KEYWORDS:
+        return GENERIC_KEYWORDS[words[0]]
+    return k
+
 
 def _cache_dir(keyword):
     d = CLIPS / hashlib.md5(keyword.lower().encode()).hexdigest()[:16]
@@ -108,6 +184,7 @@ def _download(url, dest):
 def fetch_clips(keyword, orientation="landscape", api_keys=None, max_clips=6):
     """Return local file paths of stock clips for a keyword (may be [])."""
     api_keys = api_keys or {}
+    keyword = _concrete(keyword)
     d = _cache_dir(keyword)
     marker = d / "done.json"
     if marker.exists():

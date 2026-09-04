@@ -105,14 +105,16 @@ def do_render(job):
     safely on YouTube before the owner is ever asked, so nothing can be
     lost to a runner dying or a worker restart."""
     import render_video
-    from make_thumbnails import make_thumbnail
     script = job["script"]
     sid = script["id"]
     log.info("render job: %s", sid)
     render_video.render_from_dict(script, CFG)
-    make_thumbnail(script, REVIEW / f"{sid}_thumb.png")
-    short = REVIEW / f"{sid}_short.mp4"
     long_v = REVIEW / f"{sid}_long.mp4"
+    from make_thumbnails import make_thumbnail
+    # long-form frame as the thumbnail background (falls back to paper)
+    make_thumbnail(script, REVIEW / f"{sid}_thumb.png",
+                   str(long_v) if long_v.exists() else None)
+    short = REVIEW / f"{sid}_short.mp4"
     approval_id = job.get("approval_id", job["id"])
 
     # upload right away — private, NEVER auto-scheduled public (only the

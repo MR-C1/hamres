@@ -105,15 +105,71 @@ def parse_metadata(meta_path):
     return meta
 
 
+def validate_video(mp4):
+    """Full-decode check before upload — a truncated/corrupt render
+    would otherwise land on YouTube as an unwatchable video. Cheap:
+    decodes once, no output file. Raises on failure."""
+    import subprocess
+    import imageio_ffmpeg
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    r = subprocess.run(
+        [ffmpeg, "-v", "error", "-i", str(mp4), "-f", "null", "-"],
+        capture_output=True, text=True, timeout=600)
+    if r.returncode != 0 or r.stderr.strip():
+        # a few muxing notes are normal; real errors fail the decode
+        errors = [l for l in r.stderr.strip().splitlines()
+                  if "error" in l.lower() or r.returncode != 0]
+        if errors:
+            raise RuntimeError(f"video validation failed for {mp4.name}: "
+                               f"{'; '.join(errors[:3])[:200]}")
+
+
+def find_existing(title, yt=None):
+    """Duplicate-upload guard: if the channel already has a video with
+    this title (e.g. a re-render after a crash re-queued the job),
+    return its URL instead of uploading a second copy."""
+    yt = yt or get_service()
+    norm = " ".join(title.lower().split())
+    try:
+        ch = yt.channels().list(part="contentDetails", mine=True).execute()
+        uploads = (ch["items"][0]["contentDetails"]
+                   .get("relatedPlaylists", {}).get("uploads", ""))
+        if not uploads:
+            return None
+        r = yt.playlistItems().list(part="snippet,contentDetails",
+                                    playlistId=uploads, maxResults=50).execute()
+        ids = [i["contentDetails"]["videoId"] for i in r.get("items", [])]
+        if not ids:
+            return None
+        v = yt.videos().list(part="snippet", id=",".join(ids)).execute()
+        for item in v.get("items", []):
+            if " ".join(item["snippet"]["title"].lower().split()) == norm:
+                return f"https://youtu.be/{item['id']}"
+    except Exception as e:
+        log.warning("duplicate-check failed (continuing): %s", e)
+    return None
+
+
 def upload_video(mp4, meta, config, publish_hour=None, privacy=None):
     """Upload one video file, PRIVATE with no schedule — approval-first:
     only the owner's ✅ (brain → yt.make_public) ever makes it public.
     Returns the video URL. Used by the agent worker and the run() flow."""
     yt = get_service()
     uconf = config.get("upload", {})
+    title = meta.get("title", Path(mp4).stem)[:100]
+
+    # reconciliation: never upload a title that already exists on the
+    # channel (crash + re-queue used to produce exact duplicates)
+    existing = find_existing(title, yt)
+    if existing:
+        log.info("  '%s' already on channel — reusing %s", title[:50], existing)
+        return existing
+
+    validate_video(mp4)
+
     body = {
         "snippet": {
-            "title": meta.get("title", Path(mp4).stem)[:100],
+            "title": title,
             "description": meta.get("description", ""),
             "tags": [t.strip() for t in meta.get("tags", "").split(",") if t.strip()],
             "categoryId": uconf.get("category_id", "27"),
@@ -121,6 +177,8 @@ def upload_video(mp4, meta, config, publish_hour=None, privacy=None):
         "status": {
             "privacyStatus": privacy or uconf.get("privacy", "private"),
             "selfDeclaredMadeForKids": uconf.get("made_for_kids", False),
+            # honest AI disclosure: synthetic voiceover + stock assembly
+            "containsSyntheticMedia": True,
         },
     }
 

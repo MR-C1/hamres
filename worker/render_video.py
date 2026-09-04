@@ -57,8 +57,11 @@ def gradient_clip(duration, w, h, label=""):
     return ImageClip(str(p)).with_duration(duration)
 
 
-def scene_visual(clips, duration, w, h, label=""):
-    """Build the visual track for one scene: stock clips (or gradient)."""
+def scene_visual(clips, duration, w, h, label="", motion=True):
+    """Build the visual track for one scene: stock clips (or gradient).
+    With motion=True each segment gets a slow alternating zoom (Ken
+    Burns) — static stock crops feel dead; a 4-6% drift makes them read
+    as intentional cinematography."""
     if not clips:
         return gradient_clip(duration, w, h, label)
     segments, remaining, i, opened = [], duration, 0, []
@@ -67,7 +70,23 @@ def scene_visual(clips, duration, w, h, label=""):
         opened.append(src)
         take = min(remaining, max(src.duration - 0.5, 0.5))
         start = max(0, (src.duration - take) / 2)
-        seg = fit(src.subclipped(start, start + take), w, h)
+        seg = src.subclipped(start, start + take)
+        if motion:
+            # alternate zoom directions per segment; 5% over the clip
+            zoom_in = (i % 2 == 0)
+            amt = 0.05
+            if zoom_in:
+                seg = seg.resized(lambda t, d=take: 1 + amt * (t / d))
+            else:
+                seg = seg.resized(lambda t, d=take: 1 + amt - amt * (t / d))
+            # animated size needs a fixed-size canvas: center it and let
+            # the composite clip off the overflow
+            seg = CompositeVideoClip([seg.with_position("center")],
+                                     size=(max(w, seg.w), max(h, seg.h))
+                                     ).with_position("center")
+            seg = CompositeVideoClip([seg], size=(w, h))
+        else:
+            seg = fit(seg, w, h)
         segments.append(seg)
         remaining -= take
         i += 1
@@ -75,7 +94,14 @@ def scene_visual(clips, duration, w, h, label=""):
         return gradient_clip(duration, w, h, label)
     if len(segments) == 1:
         return segments[0]
-    return concatenate_videoclips(segments, method="chain")
+    # crossfade between segments — hard cuts between unrelated stock
+    # clips read as glitches; 0.25s blends read as editing
+    from moviepy.video.fx.CrossFadeIn import CrossFadeIn
+    faded = [segments[0]]
+    for s in segments[1:]:
+        faded.append(s.with_effects([CrossFadeIn(0.25)]))
+    return concatenate_videoclips(faded, method="compose",
+                                  padding=-0.25)
 
 
 def pick_scenes(script, fmt, audio_durations):
@@ -229,6 +255,10 @@ def render_from_dict(script, config):
             str(out_path), codec="libx264", audio_codec="aac",
             fps=rconf.get("fps", 30), preset="medium", threads=4,
             temp_audiofile_path=str(REVIEW),  # temp audio next to output, not CWD
+            # normalize to YouTube's loudness target — raw TTS+music mixes
+            # vary by several dB between videos
+            audio_ffmpeg_params=["-af",
+                                 "loudnorm=I=-16:TP=-1.5:LRA=11"],
             logger=None)
         outputs.append(out_path)
 

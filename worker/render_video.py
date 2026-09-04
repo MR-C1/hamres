@@ -36,6 +36,20 @@ def fit(clip, w, h):
                                     width=w, height=h)])
 
 
+def _render_valid(path):
+    """A finished render is worth keeping only if it fully decodes —
+    MoviePy killed mid-write leaves a truncated mp4 that still opens.
+    Full-decode costs ~seconds; a needless re-render costs ~15 min."""
+    if not path.exists() or path.stat().st_size < 50_000:
+        return False
+    try:
+        from upload import validate_video
+        validate_video(path)
+        return True
+    except Exception:
+        return False
+
+
 def gradient_clip(duration, w, h, label=""):
     """Fallback background when no stock footage is available (no API key)."""
     from PIL import Image
@@ -116,22 +130,24 @@ def pick_scenes(script, fmt, audio_durations):
                         "visual_keywords": hook_visuals})]
     scenes = script["scenes"]
     if fmt == "short":
-        chosen, total = [], 0.0
+        # 18-25s sweet spot: the average Short watch is ~16s, and
+        # completion-per-second is the distribution currency. The hook
+        # is always block 1 (cold open); no outro in shorts — a
+        # "subscribe" line wastes 2-4s and reads as template
+        chosen, total = [], audio_durations.get("hook", 0.0)
         for idx, s in enumerate(scenes):
             d = audio_durations.get(f"scene{idx}", 0)
-            if s.get("in_short", True) and (total + d < 35 or not chosen):
+            if s.get("in_short", True) and (total + d < 25 or not chosen):
                 chosen.append((f"scene{idx}", s))
                 total += d
-        blocks += chosen
-        if script.get("outro"):
-            blocks.append(("outro", {"narration": script["outro"],
-                                     "visual_keywords": []}))
+        return [("hook", {"narration": script["hook"],
+                          "visual_keywords": hook_visuals})] + chosen
     else:
         blocks += [(f"scene{i}", s) for i, s in enumerate(scenes)]
         if script.get("outro"):
             blocks.append(("outro", {"narration": script["outro"],
                                      "visual_keywords": []}))
-    return blocks
+        return blocks
 
 
 def music_track(total_duration, volume):
@@ -186,6 +202,17 @@ def render_from_dict(script, config):
         blocks = pick_scenes(script, fmt, durations)
         if fmt == "long":
             blocks_long = blocks
+
+        # RESUME: a format whose output already exists and fully decodes
+        # is never re-rendered — a minute-35 crash used to redo both
+        # formats (and the TTS/footage below are cached too, so a retry
+        # costs only the step that failed)
+        REVIEW.mkdir(parents=True, exist_ok=True)
+        out_path = REVIEW / f"{sid}_{fmt}.mp4"
+        if _render_valid(out_path):
+            log.info("resume: %s already rendered — skipping", out_path.name)
+            outputs.append(out_path)
+            continue
         total = sum(durations[bid] for bid, _ in blocks)
 
         # 2) stock clips per unique keyword (both orientations cached)
@@ -251,8 +278,6 @@ def render_from_dict(script, config):
                  .with_audio(final_audio)
                  .with_duration(t))
 
-        REVIEW.mkdir(parents=True, exist_ok=True)
-        out_path = REVIEW / f"{sid}_{fmt}.mp4"
         log.info("rendering %s (%.1fs) -> %s", fmt, t, out_path.name)
         final.write_videofile(
             str(out_path), codec="libx264", audio_codec="aac",

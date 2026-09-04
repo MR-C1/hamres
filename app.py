@@ -118,18 +118,30 @@ def clear_queue():
 
 @app.route("/video-admin", methods=["POST"])
 def video_admin():
-    """Owner-tooling endpoint for YouTube cleanup on already-uploaded
-    videos: {"action": "delete"|"unschedule", "video_ids": [...]}.
-    The worker secret doubles as the admin credential — it's the owner's
-    own tooling calling this, and every action is reported in Telegram."""
+    """Owner-tooling endpoint: YouTube cleanup on already-uploaded videos
+    ({"action": "delete"|"unschedule", "video_ids": [...]}) and removal
+    of stale pending-approval entries ({"action": "forget",
+    "approval_ids": [...]}). The worker secret doubles as the admin
+    credential — it's the owner's own tooling calling this, and every
+    action is reported in Telegram."""
     if not config.WORKER_SECRET or request.headers.get("X-Worker-Secret") != config.WORKER_SECRET:
         return jsonify({"error": "unauthorized"}), 403
     data = request.get_json(force=True, silent=True) or {}
     action = data.get("action", "")
+
+    if action == "forget":
+        ids = data.get("approval_ids", [])
+        removed = [i for i in ids
+                   if state.STATE["pending_videos"].pop(i, None) is not None]
+        if removed:
+            state.save_soon()
+        comms.send(f"🛠 <b>Video admin</b> forget: {len(removed)} stale "
+                   f"entries removed.", html=True)
+        return jsonify({"ok": True, "removed": removed})
+
     ids = data.get("video_ids", [])
     if action not in ("delete", "unschedule") or not ids:
-        return jsonify({"error": "action must be delete|unschedule, "
-                                 "video_ids required"}), 400
+        return jsonify({"error": "action must be delete|unschedule|forget"}), 400
     done, failed = [], []
     for vid in ids:
         url = vid if vid.startswith("http") else f"https://youtu.be/{vid}"
@@ -584,23 +596,37 @@ def run_safely(name, fn):
 
 def scheduler_loop():
     """Every minute, run whatever is due (Dhaka time). Daily jobs catch up
-    if their slot was missed while the dyno was restarting."""
+    if their slot was missed while the dyno was restarting — and the
+    ran-today ledger lives in the persistent STATE, so a restart doesn't
+    refire jobs that already ran (that bug queued a duplicate video on
+    every single reboot)."""
     if not (config.TELEGRAM_BOT_TOKEN and config.OWNER_CHAT_ID):
         return
-    last_run = {}
+
+    def _ran(key):
+        return key in state.STATE.setdefault("scheduler_ran", {})
+
+    def _mark_ran(key):
+        today = f"{now:%Y-%m-%d}"
+        ran = state.STATE["scheduler_ran"]
+        ran[key] = True
+        # keep only today's keys — the ledger stays tiny
+        state.STATE["scheduler_ran"] = {
+            k: v for k, v in ran.items() if today in k}
+        state.save_soon()
 
     def once_per_day(name, fn, hour, minute):
         key = f"{name}:{now:%Y-%m-%d}"
-        if now >= now.replace(hour=hour, minute=minute) and key not in last_run:
-            last_run[key] = True
+        if now >= now.replace(hour=hour, minute=minute) and not _ran(key):
+            _mark_ran(key)
             comms.log(f"scheduled: {name}")
             threading.Thread(target=run_safely, args=(name, fn),
                              daemon=True).start()
 
     def every_hours(name, fn, hours):
         key = f"{name}:{now:%Y-%m-%d-%H}"
-        if now.hour % hours == 0 and now.minute < 2 and key not in last_run:
-            last_run[key] = True
+        if now.hour % hours == 0 and now.minute < 2 and not _ran(key):
+            _mark_ran(key)
             comms.log(f"scheduled: {name}")
             threading.Thread(target=run_safely, args=(name, fn),
                              daemon=True).start()

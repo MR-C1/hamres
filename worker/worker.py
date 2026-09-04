@@ -132,6 +132,7 @@ def do_render(job):
         "ok": True,
         "title": script["title"],
         "video_url": up.get("video_url", ""),
+        "video_urls": up.get("video_urls", []),
         "uploaded": bool(up.get("video_url")),
         "msg": up.get("msg", "rendered"),
     }
@@ -152,13 +153,13 @@ def _upload_files(script, sid):
         parsed = upload.parse_metadata(meta_path)
         meta.update({k: v for k, v in parsed.items() if v})
 
-    results = []
+    urls = []
     for name in (f"{sid}_short.mp4", f"{sid}_long.mp4"):
         f = REVIEW / name
         if not f.exists():
             continue
         url = upload.upload_video(f, meta, CFG)
-        results.append(url)
+        urls.append(url)
         log.info("uploaded %s -> %s", f.name, url)
         # custom thumbnail on the long-form only (Shorts ignore it)
         if url and name.endswith("_long.mp4"):
@@ -169,9 +170,12 @@ def _upload_files(script, sid):
                     log.info("thumbnail set for %s", name)
                 except Exception as e:
                     log.warning("thumbnail failed: %s", e)
-    return {"video_url": results[0] if results else "",
-            "title": script["title"] if results else "",
-            "msg": "; ".join(results)}
+    # BOTH urls ride the report — the brain's ✅ must flip the short AND
+    # the long public, not just the first one
+    return {"video_url": urls[0] if urls else "",
+            "video_urls": urls,
+            "title": script["title"] if urls else "",
+            "msg": "; ".join(urls)}
 
 
 def _cleanup_files(sid):

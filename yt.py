@@ -143,6 +143,22 @@ def reply_to_comment(comment_id, text):
     }).execute()
 
 
+def make_private(video_url):
+    """Strip any publishAt schedule and keep the video private — for
+    approval-first cleanups of videos uploaded with the old scheduled
+    flow (they'd otherwise go public on their own)."""
+    yt = get_service()
+    video_id = video_url.rstrip("/").split("/")[-1]
+    v = yt.videos().list(part="status", id=video_id).execute()
+    if not v.get("items"):
+        raise RuntimeError(f"video {video_id} not found")
+    status = v["items"][0]["status"]
+    status["privacyStatus"] = "private"
+    status.pop("publishAt", None)
+    yt.videos().update(part="status", body={
+        "id": video_id, "status": status}).execute()
+
+
 def make_public(video_url):
     """Flip a private upload to public (owner's ✅ on an upload-first
     preview — the video already sits safely on YouTube)."""

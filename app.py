@@ -116,6 +116,37 @@ def clear_queue():
                     "after": len(state.STATE["jobs"])})
 
 
+@app.route("/video-admin", methods=["POST"])
+def video_admin():
+    """Owner-tooling endpoint for YouTube cleanup on already-uploaded
+    videos: {"action": "delete"|"unschedule", "video_ids": [...]}.
+    The worker secret doubles as the admin credential — it's the owner's
+    own tooling calling this, and every action is reported in Telegram."""
+    if not config.WORKER_SECRET or request.headers.get("X-Worker-Secret") != config.WORKER_SECRET:
+        return jsonify({"error": "unauthorized"}), 403
+    data = request.get_json(force=True, silent=True) or {}
+    action = data.get("action", "")
+    ids = data.get("video_ids", [])
+    if action not in ("delete", "unschedule") or not ids:
+        return jsonify({"error": "action must be delete|unschedule, "
+                                 "video_ids required"}), 400
+    done, failed = [], []
+    for vid in ids:
+        url = vid if vid.startswith("http") else f"https://youtu.be/{vid}"
+        try:
+            if action == "delete":
+                yt.delete_video(url)
+                done.append(vid)
+            else:  # strip schedule, keep private until the owner's ✅
+                yt.make_private(url)
+                done.append(vid)
+        except Exception as e:
+            failed.append({"id": vid, "error": str(e)[:100]})
+    comms.send(f"🛠 <b>Video admin</b> {action}: {len(done)} ok, "
+               f"{len(failed)} failed.", html=True)
+    return jsonify({"ok": not failed, "done": done, "failed": failed})
+
+
 @app.route("/report", methods=["POST"])
 def report():
     if not config.WORKER_SECRET or request.headers.get("X-Worker-Secret") != config.WORKER_SECRET:
@@ -134,9 +165,12 @@ def report():
     if is_render and ok:
         approval_id = (job or {}).get("approval_id") or job_id
         if data.get("video_url"):
+            # every uploaded format (short + long) so ✅/❌ act on all
+            urls = data.get("video_urls") or [data.get("video_url")]
             state.STATE["pending_videos"][approval_id] = {
                 "title": data.get("title", ""),
                 "video_url": data.get("video_url", ""),
+                "video_urls": urls,
                 "job_id": job_id,
             }
             state.save_soon()
@@ -162,12 +196,15 @@ def report():
 
 
 def _publish_now(approval_id, note=""):
-    """Flip a pending video's YouTube privacy to public."""
+    """Flip a pending video's YouTube privacy to public — every format
+    (short + long) uploaded for it."""
     p = state.STATE["pending_videos"].get(approval_id)
     if not p or not p.get("video_url"):
         return False
+    urls = p.get("video_urls") or [p["video_url"]]
     try:
-        yt.make_public(p["video_url"])
+        for url in urls:
+            yt.make_public(url)
     except Exception as e:
         comms.send(f"⚠️ Couldn't make it public — {comms.esc(str(e)[:150])}. "
                    f"Try again or flip it in YouTube Studio.", html=True)
@@ -175,19 +212,21 @@ def _publish_now(approval_id, note=""):
     state.STATE["pending_videos"].pop(approval_id, None)
     state.save_soon()
     comms.send(f"🚀 <b>Published</b> — {comms.esc(p['title'][:60])}\n"
-               f"{comms.esc(p['video_url'])}", html=True)
+               f"{comms.esc(urls[0])}", html=True)
     return True
 
 
 def _delete_pending(approval_id):
-    """Delete a pending video from YouTube (owner's ❌)."""
+    """Delete a pending video from YouTube (owner's ❌) — every format."""
     p = state.STATE["pending_videos"].pop(approval_id, None)
     if not p or not p.get("video_url"):
         comms.send("🤷 That video isn't pending anymore.")
         return False
     state.save_soon()
+    urls = p.get("video_urls") or [p["video_url"]]
     try:
-        yt.delete_video(p["video_url"])
+        for url in urls:
+            yt.delete_video(url)
         comms.send(f"🗑 Deleted from YouTube — {comms.esc(p['title'][:60])}.",
                    html=True)
     except Exception as e:

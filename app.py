@@ -393,6 +393,24 @@ def cmd_publish(_):
     _publish_pending()
 
 
+def cmd_clear(args):
+    """Clear the job queue: /clear (all jobs) or /clear failed."""
+    state.default_state()
+    jobs.reload_jobs()
+    before = len(state.STATE["jobs"])
+    if args.strip().lower() == "failed":
+        state.STATE["jobs"] = [j for j in state.STATE["jobs"]
+                               if j.get("status") != "failed"]
+        what = "failed jobs"
+    else:
+        state.STATE["jobs"] = []
+        what = "entire queue"
+    state.save_now()
+    comms.send(f"🧹 Cleared the {what} ({before} → "
+               f"{len(state.STATE['jobs'])} jobs remain). /next queues a "
+               f"fresh video.", html=True)
+
+
 COMMANDS = {
     "help": cmd_help, "start": cmd_help,
     "status": cmd_status,
@@ -440,24 +458,6 @@ def _publish_pending():
         return
     for uid in undecided:
         _record_decision(uid, "approved")
-
-
-def cmd_clear(args):
-    """Clear the job queue: /clear (all jobs) or /clear failed."""
-    state.default_state()
-    jobs.reload_jobs()
-    before = len(state.STATE["jobs"])
-    if args.strip().lower() == "failed":
-        state.STATE["jobs"] = [j for j in state.STATE["jobs"]
-                               if j.get("status") != "failed"]
-        what = "failed jobs"
-    else:
-        state.STATE["jobs"] = []
-        what = "entire queue"
-    state.save_now()
-    comms.send(f"🧹 Cleared the {what} ({before} → "
-               f"{len(state.STATE['jobs'])} jobs remain). /next queues a "
-               f"fresh video.", html=True)
 
 
 def chat_reply(text):

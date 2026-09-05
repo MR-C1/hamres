@@ -400,10 +400,13 @@ def render_from_dict(script, config):
 
             # REAL archival, in documentary order: period FOOTAGE of the
             # actual event (newsreels, government film) → real PHOTOS/
-            # documents → stock footage only when nothing real exists.
+            # documents → stock footage ONLY as the last resort. Owner
+            # directive: real material must dominate. Multiple search
+            # terms are all tried; stock fills only genuinely abstract
+            # connective moments.
             visual = None
             terms = s.get("archive_search", [])
-            for term in terms[:1]:
+            for term in terms:
                 vids = archives.search_archive_video(term)
                 if vids:
                     pick = vids[scene_no % len(vids)]

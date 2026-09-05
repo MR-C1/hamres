@@ -166,6 +166,28 @@ def video_admin():
     return jsonify({"ok": not failed, "done": done, "failed": failed})
 
 
+@app.route("/queue-render", methods=["POST"])
+def queue_render():
+    """Queue a hand-authored script for cloud rendering (owner tooling:
+    trailers, custom topics). Worker-secret guarded."""
+    if not config.WORKER_SECRET or request.headers.get("X-Worker-Secret") != config.WORKER_SECRET:
+        return jsonify({"error": "unauthorized"}), 403
+    state.default_state()
+    data = request.get_json(force=True, silent=True) or {}
+    script = data.get("script") or {}
+    if not all(script.get(k) for k in ("id", "title", "hook", "scenes")):
+        return jsonify({"error": "script needs id/title/hook/scenes"}), 400
+    import uuid
+    payload = {"script": script}
+    if data.get("approval_id"):
+        payload["approval_id"] = data["approval_id"]
+    job = jobs.add_job("render", payload)
+    cloud.wake_soon("render")
+    comms.send(f"🎬 <b>Custom render queued</b> — "
+               f"{comms.esc(script['title'][:50])}", html=True)
+    return jsonify({"ok": True, "job_id": job["id"]})
+
+
 @app.route("/report", methods=["POST"])
 def report():
     if not config.WORKER_SECRET or request.headers.get("X-Worker-Secret") != config.WORKER_SECRET:

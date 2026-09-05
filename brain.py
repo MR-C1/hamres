@@ -38,6 +38,7 @@ SCRIPT_PROMPT = """Write ONE video script for a faceless YouTube facts/mystery c
   "id": "kebab-case-topic-slug",
   "format": ["short", "long"],
   "title": "Curiosity-gap title under 70 chars",
+  "title_alternatives": ["exactly 2 alternative curiosity-gap titles"],
   "description": "Full YouTube description: 120-200 words. First 1-2 lines = a hook that sells the click (this text shows in search results). Then 2-3 short paragraphs of context that tease the mystery WITHOUT spoiling the answer. End with an engaging question, then a line of 4-6 hashtags relevant to THIS topic (like #unsolvedmystery #truehistory #didyouknow).",
   "tags": ["8-14 specific tags: mix broad (facts, mystery) and topic-specific] ,
   "hook": "80-120 words. A cinematic COLD-OPEN vignette: drop the viewer INTO the single most striking moment of the story (a date, a place, a person mid-crisis). No greeting, no channel intro, no context. End on the framing question the whole video answers.",
@@ -140,14 +141,54 @@ def _score_hook(script):
         return 75, "unscorable"
 
 
+RESEARCH_PROMPT = """You are researching a topic for a documentary YouTube channel. Channel direction: {direction}
+
+Topics already used (pick something DIFFERENT): {used}
+
+Pick ONE topic in this direction and RESEARCH IT using web search. Return strict JSON only:
+{{
+  "topic": "the chosen subject",
+  "angle": "the fresh 'footnote' angle — the overlooked detail that changes the story (1-2 sentences)",
+  "sources": [{{"fact": "one specific verified fact", "citation": "source name + URL"}} ... 5 to 8 entries, from REAL search results],
+  "archive_terms": ["3-5 Wikimedia Commons search terms for real photos of the actual people/places/evidence"],
+  "saturation_note": "one sentence: how covered is this topic already by big channels?"
+}}"""
+
+
+def _research(direction, used):
+    """Grounded pre-script research pass (Doc-2 pattern): collect real
+    sources BEFORE writing, so the script is written FROM evidence
+    instead of model memory. Fails open — quota loss or a search hiccup
+    just means writing from memory as before."""
+    try:
+        r = llm.search_complete(RESEARCH_PROMPT.format(
+            direction=direction, used=used))
+        if r.strip().startswith("```"):
+            r = r.split("```")[1]
+            if r.strip().startswith("json"):
+                r = r[4:]
+        d = json.loads(r)
+        if d.get("sources"):
+            comms.log(f"research pass: {len(d['sources'])} sources on "
+                      f"'{str(d.get('topic'))[:40]}'")
+            return d
+    except Exception as e:
+        comms.log(f"research pass failed (open): {str(e)[:60]}")
+    return None
+
+
 def generate_script(direction=None):
     """Write one script, then QA the hook: below 70 → one regeneration,
     keep the better script. Scores are kept in the gist so the future
     analytics loop can correlate hook style with retention."""
     best = None
     best_score = -1
+    d = direction or state.STATE.get("topic_direction") or (
+        "unsolved mysteries, strange science, history they never taught you")
+    used = ", ".join(state.STATE.get("used_topics", [])[-40:]) or "none yet"
+    research = _research(d, used)
     for attempt in range(2):
-        script = _write_script(direction)
+        script = _write_script(direction, research)
         if not script:
             continue
         score, reason = _score_hook(script)
@@ -163,11 +204,23 @@ def generate_script(direction=None):
     return best
 
 
-def _write_script(direction=None):
+def _write_script(direction=None, research=None):
     direction = direction or state.STATE.get("topic_direction") or (
         "unsolved mysteries, strange science, history they never taught you")
     used = ", ".join(state.STATE.get("used_topics", [])[-40:]) or "none yet"
-    text = gemini(SCRIPT_PROMPT.format(direction=direction, used=used))
+    prompt = SCRIPT_PROMPT.format(direction=direction, used=used)
+    if research:
+        # the script is written FROM grounded research, not memory:
+        # scene 'source' fields must cite these; facts must not contradict
+        prompt += ("\n\nGROUNDED RESEARCH on the topic (write the script "
+                   "FROM these facts; scene 'source' fields cite them; do "
+                   "not contradict them):\n"
+                   + json.dumps(research.get("sources", []),
+                                ensure_ascii=False)[:3500]
+                   + "\nFresh angle: " + str(research.get("angle", ""))[:300]
+                   + "\nSaturation: "
+                   + str(research.get("saturation_note", ""))[:200])
+    text = gemini(prompt)
     if not text:
         return None
     if text.startswith("```"):

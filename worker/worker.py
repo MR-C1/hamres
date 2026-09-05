@@ -137,6 +137,7 @@ def do_render(job):
     result = {
         "ok": True,
         "title": script["title"],
+        "title_alternatives": script.get("title_alternatives", []),
         "video_url": up.get("video_url", ""),
         "video_urls": up.get("video_urls", []),
         "uploaded": bool(up.get("video_url")),

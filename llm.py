@@ -60,6 +60,31 @@ def _openai_compatible(base, key, model, prompt, system, max_tokens):
     return content.strip()
 
 
+def search_complete(prompt, system=None, max_tokens=4000):
+    """Gemini WITH google_search grounding — the model searches the live
+    web and answers with real sources. Used for the research pass before
+    scripting: facts arrive grounded instead of from model memory.
+    (Free tier: search grounding ~500 requests/day, verified.)"""
+    from google import genai
+    if not config.GEMINI_API_KEY:
+        raise RuntimeError("no gemini key for search grounding")
+    client = genai.Client(api_key=config.GEMINI_API_KEY)
+    for model in GEMINI_MODELS:
+        try:
+            cfg = {"max_output_tokens": max_tokens,
+                   "tools": [{"google_search": {}}]}
+            if system:
+                cfg["system_instruction"] = system
+            r = client.models.generate_content(model=model, contents=prompt,
+                                               config=cfg)
+            text = (r.text or "").strip()
+            if text:
+                return text
+        except Exception as e:
+            comms.log(f"gemini-search {model} failed: {str(e)[:80]}")
+    raise RuntimeError("all gemini-search models failed")
+
+
 def complete(prompt, system=None, max_tokens=8000):
     """Try Gemini, then Groq, then OpenRouter. Raises only if all fail.
     Default 8000 output tokens: full scripts (10-14 scenes, ~1,800

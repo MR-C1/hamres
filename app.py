@@ -188,6 +188,7 @@ def report():
             urls = data.get("video_urls") or [data.get("video_url")]
             state.STATE["pending_videos"][approval_id] = {
                 "title": data.get("title", ""),
+                "title_alternatives": data.get("title_alternatives", []),
                 "video_url": data.get("video_url", ""),
                 "video_urls": urls,
                 "job_id": job_id,

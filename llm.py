@@ -14,23 +14,48 @@ import config
 GEMINI_MODELS = ["gemini-flash-latest", "gemini-3.5-flash-lite",
                  "gemini-3.1-flash-lite", "gemini-flash-lite-latest"]
 
+# key rotation: {key: cooldown_until}. A 429 cools that KEY for 30 min
+# (covers per-minute limits; per-day quotas revive on window rollover)
+import time as _time
+_key_cooldown = {}
+
+
+def _gemini_keys():
+    """Usable Gemini keys — live keys first, cooling ones last resort."""
+    keys = list(config.GEMINI_API_KEYS)
+    now = _time.time()
+    live = [k for k in keys if _key_cooldown.get(k, 0) <= now]
+    cooling = [k for k in keys if _key_cooldown.get(k, 0) > now]
+    return live + cooling
+
 
 def _gemini(prompt, system, max_tokens):
     from google import genai
-    client = genai.Client(api_key=config.GEMINI_API_KEY)
-    for model in GEMINI_MODELS:
-        try:
-            cfg = {"max_output_tokens": max_tokens}
-            if system:
-                cfg["system_instruction"] = system
-            r = client.models.generate_content(
-                model=model, contents=prompt, config=cfg)
-            text = (r.text or "").strip()
-            if text:
-                return text
-        except Exception as e:
-            comms.log(f"gemini {model} failed: {str(e)[:80]}")
-    raise RuntimeError("all gemini models failed")
+    last_err = None
+    for key in _gemini_keys():
+        client = genai.Client(api_key=key)
+        for model in GEMINI_MODELS:
+            try:
+                cfg = {"max_output_tokens": max_tokens}
+                if system:
+                    cfg["system_instruction"] = system
+                r = client.models.generate_content(
+                    model=model, contents=prompt, config=cfg)
+                text = (r.text or "").strip()
+                if text:
+                    return text
+            except Exception as e:
+                msg = str(e)
+                last_err = e
+                if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
+                    # THIS key's quota is hit — cool it and rotate to the
+                    # next key (not the next model: same key = same quota)
+                    _key_cooldown[key] = _time.time() + 1800
+                    comms.log(f"gemini key ...{key[-6:]} quota-hit — "
+                              f"rotating to next key")
+                    break
+                comms.log(f"gemini {model} failed: {msg[:80]}")
+    raise RuntimeError(f"all gemini models failed: {last_err}")
 
 
 def _openai_compatible(base, key, model, prompt, system, max_tokens):
@@ -66,23 +91,32 @@ def search_complete(prompt, system=None, max_tokens=4000):
     scripting: facts arrive grounded instead of from model memory.
     (Free tier: search grounding ~500 requests/day, verified.)"""
     from google import genai
-    if not config.GEMINI_API_KEY:
+    if not config.GEMINI_API_KEYS:
         raise RuntimeError("no gemini key for search grounding")
-    client = genai.Client(api_key=config.GEMINI_API_KEY)
-    for model in GEMINI_MODELS:
-        try:
-            cfg = {"max_output_tokens": max_tokens,
-                   "tools": [{"google_search": {}}]}
-            if system:
-                cfg["system_instruction"] = system
-            r = client.models.generate_content(model=model, contents=prompt,
-                                               config=cfg)
-            text = (r.text or "").strip()
-            if text:
-                return text
-        except Exception as e:
-            comms.log(f"gemini-search {model} failed: {str(e)[:80]}")
-    raise RuntimeError("all gemini-search models failed")
+    last_err = None
+    for key in _gemini_keys():
+        client = genai.Client(api_key=key)
+        for model in GEMINI_MODELS:
+            try:
+                cfg = {"max_output_tokens": max_tokens,
+                       "tools": [{"google_search": {}}]}
+                if system:
+                    cfg["system_instruction"] = system
+                r = client.models.generate_content(model=model,
+                                                   contents=prompt, config=cfg)
+                text = (r.text or "").strip()
+                if text:
+                    return text
+            except Exception as e:
+                msg = str(e)
+                last_err = e
+                if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
+                    _key_cooldown[key] = _time.time() + 1800
+                    comms.log(f"gemini-search key ...{key[-6:]} quota-hit — "
+                              f"rotating to next key")
+                    break
+                comms.log(f"gemini-search {model} failed: {msg[:80]}")
+    raise RuntimeError(f"search grounding failed: {last_err}")
 
 
 def complete(prompt, system=None, max_tokens=8000):
@@ -127,11 +161,16 @@ def diagnose():
     """Health-check every configured provider — used by /diag."""
     lines = []
     test = "Reply with the single word: ok"
-    if config.GEMINI_API_KEY:
+    if config.GEMINI_API_KEYS:
+        now = _time.time()
+        live = sum(1 for k in config.GEMINI_API_KEYS
+                   if _key_cooldown.get(k, 0) <= now)
         try:
-            lines.append(f"✅ gemini — replied: {_gemini(test, None, 20)[:40]!r}")
+            lines.append(f"✅ gemini — replied: {_gemini(test, None, 20)[:40]!r} "
+                         f"[{live}/{len(config.GEMINI_API_KEYS)} keys live]")
         except Exception as e:
-            lines.append(f"❌ gemini — {str(e)[:200]}")
+            lines.append(f"❌ gemini — {str(e)[:200]} "
+                         f"[{live}/{len(config.GEMINI_API_KEYS)} keys live]")
     else:
         lines.append("— gemini: no key")
     for name, base, key, model in [

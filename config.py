@@ -9,8 +9,19 @@ OWNER_CHAT_ID = os.environ.get("OWNER_CHAT_ID", "")  # only this chat is obeyed
 # shared secret between this brain and the home-PC worker (any long string)
 WORKER_SECRET = os.environ.get("WORKER_SECRET", "")
 
-# Gemini (script writing + growth analysis) — free key from aistudio.google.com
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+# Gemini (script writing + growth analysis) — free keys from
+# aistudio.google.com. MULTIPLE KEYS rotate automatically when one hits
+# its daily quota (429): set GEMINI_API_KEY as key1,key2,key3 (comma-
+# separated) or GEMINI_API_KEY_2 / _3 / _4 as extra env vars. Each
+# Google account gets its own free key with its own quota.
+_raw_keys = [k.strip() for k in
+             os.environ.get("GEMINI_API_KEY", "").split(",") if k.strip()]
+for _i in (2, 3, 4):
+    _extra = os.environ.get(f"GEMINI_API_KEY_{_i}", "").strip()
+    if _extra and _extra not in _raw_keys:
+        _raw_keys.append(_extra)
+GEMINI_API_KEYS = _raw_keys
+GEMINI_API_KEY = _raw_keys[0] if _raw_keys else ""  # legacy single-key name
 
 # Optional fallbacks (both free tiers) — used automatically when Gemini is down
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")  # console.groq.com

@@ -177,10 +177,15 @@ def video_admin():
 import hashlib as _hashlib
 
 def _panel_ok():
-    import flask
-    key = request.cookies.get("panel_key", "")
-    want = _hashlib.sha256(config.WORKER_SECRET.encode()).hexdigest()
-    return bool(config.WORKER_SECRET) and key == want
+    """Auth: session cookie OR the raw secret as a header (the login
+    screen sends the header first; the cookie serves later visits)."""
+    key = request.cookies.get("panel_key", "") or         request.headers.get("X-Panel-Key", "")
+    if not config.WORKER_SECRET:
+        return False
+    # the header carries the raw secret; the cookie carries its hash
+    if key == config.WORKER_SECRET:
+        return True
+    return key == _hashlib.sha256(config.WORKER_SECRET.encode()).hexdigest()
 
 
 PANEL_HTML = """<!doctype html>

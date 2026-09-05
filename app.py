@@ -185,109 +185,266 @@ def _panel_ok():
     return True
 
 
-PANEL_HTML = """<!doctype html>
+PANEL_HTML = r"""<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>FOOTNOTE Control Panel</title>
 <style>
-:root{--ink:#14141e;--card:#1d1d29;--cream:#faf6ee;--red:#b21818;--dim:#8b8b9e;--ok:#3fbf6f;--warn:#e0a030}
+:root{--ink:#14141e;--card:#1d1d29;--card2:#232331;--cream:#faf6ee;--red:#b21818;--dim:#8b8b9e;--ok:#3fbf6f;--warn:#e0a030;--blue:#5fa8e8}
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--ink);color:var(--cream);font:14px/1.5 system-ui,sans-serif;padding:20px;max-width:1100px;margin:0 auto}
+body{background:var(--ink);color:var(--cream);font:14px/1.5 system-ui,sans-serif;padding:16px;max-width:1280px;margin:0 auto}
+header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:6px}
 h1{font-size:22px;letter-spacing:.5px}h1 .star{color:var(--red)}
-.pills{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}
-.pill{background:var(--card);border-radius:20px;padding:6px 14px;font-size:13px}
-.pill b{color:var(--red)}
-.card{background:var(--card);border-radius:12px;padding:16px;margin:14px 0}
-.card h2{font-size:15px;text-transform:uppercase;letter-spacing:1px;color:var(--dim);margin-bottom:10px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px}
+.dot.ok{background:var(--ok);box-shadow:0 0 8px var(--ok)}.dot.warn{background:var(--warn)}.dot.bad{background:var(--red)}
+#live{font-size:12px;color:var(--dim);margin-left:auto}
+nav{display:flex;gap:6px;margin:10px 0;flex-wrap:wrap}
+nav button{background:var(--card);border:0;color:var(--dim);border-radius:8px;padding:8px 16px;font-size:13px;cursor:pointer}
+nav button.on{background:var(--red);color:var(--cream)}
+.tab{display:none}.tab.on{display:block}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.card{background:var(--card);border-radius:12px;padding:16px;margin:12px 0}
+.card h2{font-size:13px;text-transform:uppercase;letter-spacing:1px;color:var(--dim);margin-bottom:10px}
+.stat{font-size:26px;font-weight:700}.stat small{font-size:13px;color:var(--dim);font-weight:400}
+.delta{font-size:12px}.up{color:var(--ok)}.down{color:var(--red)}
 table{width:100%;border-collapse:collapse;font-size:13px}
-td,th{padding:6px 8px;text-align:left;border-bottom:1px solid #2a2a3a}
-th{color:var(--dim);font-weight:600}
-.st-pending{color:var(--warn)}.st-claimed{color:#5fa8e8}.st-done{color:var(--ok)}.st-failed{color:var(--red)}
-.btn{background:var(--red);color:var(--cream);border:0;border-radius:8px;padding:8px 16px;font-size:13px;cursor:pointer;margin:2px}
-.btn:hover{filter:brightness(1.2)}
-.btn.ghost{background:#2a2a3a}
-.videorow{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #2a2a3a}
+td,th{padding:7px 8px;text-align:left;border-bottom:1px solid #2a2a3a}
+th{color:var(--dim);font-weight:600;cursor:pointer;user-select:none}
+th:hover{color:var(--cream)}
+.st-pending{color:var(--warn)}.st-claimed{color:var(--blue)}.st-done{color:var(--ok)}.st-failed{color:var(--red)}
+.badge{font-size:11px;padding:2px 8px;border-radius:10px;background:#2a2a3a;color:var(--dim)}
+.badge.pub{background:#1d3a2a;color:var(--ok)}.badge.priv{background:#3a2a1d;color:var(--warn)}
+.btn{background:var(--red);color:var(--cream);border:0;border-radius:8px;padding:7px 14px;font-size:13px;cursor:pointer;margin:2px}
+.btn:hover{filter:brightness(1.25)}
+.btn.ghost{background:var(--card2)}.btn.sm{padding:4px 10px;font-size:12px}
+.actions{display:flex;flex-wrap:wrap;gap:4px}
+.videorow{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #2a2a3a;flex-wrap:wrap}
 .videorow a{color:var(--cream);text-decoration:none;font-weight:600}
 .videorow a:hover{color:var(--red)}
 .grow{flex:1}
-.log{font-family:ui-monospace,monospace;font-size:12px;color:var(--dim);max-height:260px;overflow-y:auto}
-.log div{padding:2px 0;border-bottom:1px solid #232330}
-.actions{display:flex;flex-wrap:wrap;gap:4px}
-input{background:#2a2a3a;border:1px solid #3a3a4a;color:var(--cream);border-radius:8px;padding:10px;font-size:14px;width:100%}
-.login{max-width:360px;margin:80px auto;text-align:center}
-#refresh{color:var(--dim);font-size:12px;text-align:right}
+.log{font-family:ui-monospace,monospace;font-size:12px;color:var(--dim);max-height:300px;overflow-y:auto;background:var(--card2);border-radius:8px;padding:10px}
+.log div{padding:2px 0;border-bottom:1px solid #232330;white-space:pre-wrap}
+.log .t{color:var(--blue)}
+canvas{width:100%;height:120px;display:block}
+.bar{height:8px;border-radius:4px;background:var(--card2);overflow:hidden;margin-top:6px}
+.bar i{display:block;height:100%;background:var(--red)}
+textarea,input[type=text]{background:var(--card2);border:1px solid #3a3a4a;color:var(--cream);border-radius:8px;padding:10px;font-size:14px;width:100%;font-family:inherit}
+textarea{min-height:70px;resize:vertical}
+#toast{position:fixed;bottom:20px;right:20px;background:var(--red);color:var(--cream);padding:12px 20px;border-radius:10px;opacity:0;transition:opacity .3s;z-index:9;font-size:13px}
+.toast-ok{background:#1d3a2a !important;color:var(--ok) !important}
+.muted{color:var(--dim);font-size:12px}
+.score{font-weight:700}.score.hi{color:var(--ok)}.score.mid{color:var(--warn)}.score.lo{color:var(--red)}
+.toggle{cursor:pointer;user-select:none}
+kbd{background:var(--card2);border-radius:4px;padding:1px 6px;font-size:11px}
+details{margin:8px 0}summary{cursor:pointer;color:var(--dim);font-size:13px}
 </style></head><body>
-<div id="panel">
-  <h1>FOOTNOTE<span class="star">*</span> <span style="font-size:13px;color:var(--dim)">Control Panel</span></h1>
-  <div class="pills" id="pills"></div>
-  <div class="card"><h2>Actions</h2><div class="actions">
-    <button class="btn" onclick="act('next')">🎬 New video</button>
-    <button class="btn" onclick="act('publish')">🚀 Publish all</button>
-    <button class="btn ghost" onclick="act('retry')">🔁 Retry failed</button>
-    <button class="btn ghost" onclick="act('pause')">⏸ Pause</button>
-    <button class="btn ghost" onclick="act('resume')">▶️ Resume</button>
-    <button class="btn ghost" onclick="act('clear_failed')">🧹 Clear failed</button>
-    <button class="btn ghost" onclick="act('reset')">🔄 Reset approvals</button>
-    <button class="btn ghost" style="background:#4a1a1a" onclick="if(confirm('Wipe the whole queue? Pending approvals are dropped (videos stay private).'))act('clear_all')">⛔ Clear everything</button>
-  </div></div>
-  <div class="card"><h2>Awaiting your decision</h2><div id="pending"></div></div>
-  <div class="card"><h2>Job queue</h2><div id="queue"></div></div>
-  <div class="card"><h2>Recent activity</h2><div class="log" id="log"></div></div>
-  <div id="refresh"></div>
+<header><h1>FOOTNOTE<span class="star">*</span> <span class="muted">Control Center</span></h1>
+<span id="health"></span><span id="live"></span></header>
+<nav>
+<button class="on" data-t="dash" onclick="tab('dash')">📊 Dashboard</button>
+<button data-t="videos" onclick="tab('videos')">📺 Videos</button>
+<button data-t="pending" onclick="tab('pending')">🎬 Decisions</button>
+<button data-t="tools" onclick="tab('tools')">🛠 Tools</button>
+<button data-t="logs" onclick="tab('logs')">📜 Logs</button>
+</nav>
+
+<div class="tab on" id="t-dash">
+ <div class="grid" id="statcards"></div>
+ <div class="grid">
+  <div class="card"><h2>Subscribers</h2><canvas id="c-subs"></canvas><p class="muted" id="subs-note"></p></div>
+  <div class="card"><h2>Views</h2><canvas id="c-views"></canvas><p class="muted" id="views-note"></p></div>
+ </div>
+ <div class="grid">
+  <div class="card"><h2>Hook virality scores</h2><div id="hooks" class="log" style="max-height:160px"></div></div>
+  <div class="card"><h2>Auto-approve trust</h2><div id="trust"></div>
+   <button class="btn ghost sm" style="margin-top:10px" onclick="act('toggle_auto')">Toggle auto-approve</button>
+   <button class="btn ghost sm" onclick="act('reset')">Reset counter</button></div>
+ </div>
+ <div class="card"><h2>Job queue</h2><div id="queue"></div></div>
 </div>
+
+<div class="tab" id="t-videos">
+ <div class="card"><h2>Channel videos <span class="muted">(click headers to sort)</span></h2>
+ <div style="overflow-x:auto"><table id="vidtable"><thead><tr>
+  <th onclick="sortV('title')">Title</th><th onclick="sortV('privacy')">Status</th>
+  <th onclick="sortV('views')">Views</th><th onclick="sortV('likes')">Likes</th>
+  <th onclick="sortV('comments')">Comments</th><th onclick="sortV('published')">Published</th><th></th>
+ </tr></thead><tbody id="vidbody"></tbody></table></div></div>
+</div>
+
+<div class="tab" id="t-pending">
+ <div class="card"><h2>Awaiting your decision</h2><div id="pending"></div></div>
+</div>
+
+<div class="tab" id="t-tools">
+ <div class="grid">
+  <div class="card"><h2>Quick actions</h2><div class="actions">
+   <button class="btn" onclick="act('next')">🎬 New video</button>
+   <button class="btn" onclick="act('publish')">🚀 Publish all pending</button>
+   <button class="btn ghost" onclick="act('retry')">🔁 Retry failed jobs</button>
+   <button class="btn ghost" onclick="act('pause')">⏸ Pause auto work</button>
+   <button class="btn ghost" onclick="act('resume')">▶️ Resume</button>
+   <button class="btn ghost" onclick="act('clear_failed')">🧹 Clear failed</button>
+   <button class="btn ghost" onclick="act('refresh_channel')">🔄 Refresh channel data</button>
+   <button class="btn ghost" style="background:#4a1a1a" onclick="if(confirm('Wipe the queue and drop pending approvals? Videos stay private.'))act('clear_all')">⛔ Clear everything</button>
+  </div></div>
+  <div class="card"><h2>Custom video</h2>
+   <textarea id="idea" placeholder="Topic or angle… e.g. 'the 1989 memo that created Area 51'"></textarea>
+   <button class="btn" style="margin-top:8px" onclick="idea()">✍️ Write & queue script</button>
+   <p class="muted" style="margin-top:6px">Grounded research → virality gate → cloud render. Preview lands in Telegram + the Decisions tab.</p></div>
+ </div>
+ <div class="card"><h2>Topic guidance (from growth analysis)</h2><div id="direction" class="log" style="max-height:180px"></div></div>
+ <div class="card"><h2>Used topics</h2><div id="topics" class="muted"></div></div>
+</div>
+
+<div class="tab" id="t-logs">
+ <div class="card"><h2>Brain activity</h2><div id="log" class="log"></div></div>
+</div>
+<div id="toast"></div>
 <script>
-async function load(){
-  const r=await fetch('/api/state');
-  if(r.status===403){location.reload();return}
-  const d=await r.json();KEY=d._key;
-  const P=(t,v)=>'<div class="pill">'+t+' <b>'+v+'</b></div>';
-  document.getElementById('pills').innerHTML=
-    P('📺',d.channel.title+' — '+d.channel.subs+' subs')+P('👁',d.channel.views+' views')+
-    P('🎬',d.channel.videos+' videos')+P('⏳',d.queue.pending+' pending jobs')+
-    P('✅',d.queue.awaiting+' awaiting decision')+
-    P('🤖','auto-approve '+(d.settings.auto_approve?'ON':'off')+' ('+d.settings.approved+'/10)')+
-    P('⚙️','auto work '+(d.settings.paused?'PAUSED':'running'))+
-    P('🖥','worker seen '+d.worker.mins_ago+'m ago')+P('⏱','brain up '+d.uptime);
-  let ph='';
-  if(!d.pending.length)ph='<p style="color:var(--dim)">Nothing awaiting decision.</p>';
-  for(const v of d.pending){
-    ph+='<div class="videorow"><a href="'+v.url+'" target="_blank">'+esc(v.title)+'</a>'+
-      '<span style="color:var(--dim);font-size:12px">'+v.alts+' alt titles</span>'+
-      '<span class="grow"></span>'+
-      '<button class="btn" onclick="act(\'publish:'+v.id+'\')">✅ Publish</button>'+
-      '<button class="btn ghost" style="background:#4a1a1a" onclick="if(confirm(\'Delete this video from YouTube permanently?\'))act(\'reject:'+v.id+'\')">❌ Delete</button></div>';
-  }
-  document.getElementById('pending').innerHTML=ph;
-  let qh='<table><tr><th></th><th>id</th><th>type</th><th>status</th><th>age</th><th>title</th></tr>';
-  if(!d.jobs.length)qh+='<tr><td colspan="6" style="color:var(--dim)">Queue empty</td></tr>';
-  for(const j of d.jobs.slice(-15).reverse()){
-    qh+='<tr><td class="st-'+j.status+'">'+({pending:'⏳',claimed:'🔧',done:'✅',failed:'❌'}[j.status]||'❓')+'</td>'+
-    '<td><code>'+j.id.slice(0,8)+'</code></td><td>'+j.type+'</td><td class="st-'+j.status+'">'+j.status+'</td><td>'+j.age+'m</td><td>'+esc(j.title)+'</td></tr>';
-  }
-  document.getElementById('queue').innerHTML=qh+'</table>';
-  document.getElementById('log').innerHTML=d.log.map(l=>'<div>'+esc(l)+'</div>').join('');
-  document.getElementById('refresh').textContent='auto-refresh 15s · '+new Date().toLocaleTimeString();
-}
+let DATA=null,PAUSED=false,VIDSORT={k:'views',asc:false};
+function tab(t){document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));
+ document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x.id=='t-'+t))}
 function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
-async function act(a){
-  const r=await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:a})});
-  const d=await r.json();
-  if(d.ok!==false)load();else alert(d.error||'failed');
+function toast(m,ok){const t=document.getElementById('toast');t.textContent=m;t.className=ok?'toast-ok':'';t.style.opacity=1;
+ setTimeout(()=>t.style.opacity=0,2600)}
+function fmt(n){return (n||0).toLocaleString()}
+
+async function load(){
+ const r=await fetch('/api/state');if(!r.ok)return;
+ DATA=await r.json();render();
 }
-load();setInterval(load,15000);
+function render(){
+ const d=DATA;
+ // health
+ const h=d.worker.mins_ago<10?'ok':d.worker.mins_ago<70?'warn':'bad';
+ document.getElementById('health').innerHTML=
+  '<span class="dot '+h+'"></span><span class="muted">worker '+d.worker.mins_ago+'m · brain '+d.uptime+'</span>';
+ document.getElementById('live').textContent=(PAUSED?'⏸ ':'')+'auto-refresh '+(PAUSED?'paused':'15s')+' · '+new Date().toLocaleTimeString();
+ // stat cards
+ const C=(t,v,s)=>'<div class="card"><h2>'+t+'</h2><div class="stat">'+v+'</div><div class="muted">'+(s||'')+'</div></div>';
+ const trust=d.settings.approved+' / 10';
+ document.getElementById('statcards').innerHTML=
+  C('Subscribers',fmt(d.channel.subs),d.delta.subs!=null?'<span class="delta '+(d.delta.subs>=0?'up':'down')+'">'+(d.delta.subs>=0?'+':'')+d.delta.subs+' today</span>':'first reading')+
+  C('Total views',fmt(d.channel.views),d.delta.views!=null?'<span class="delta '+(d.delta.views>=0?'up':'down')+'">'+(d.delta.views>=0?'+':'')+fmt(d.delta.views)+' today</span>':'first reading')+
+  C('Videos',fmt(d.channel.videos),d.channel.public+' public · '+d.channel.private+' private')+
+  C('Queue',d.queue.pending+' <small>pending</small>',d.queue.claimed+' claimed · '+d.queue.failed+' failed')+
+  C('Decisions',d.queue.awaiting+' <small>awaiting</small>','tap Decisions tab')+
+  C('Auto-approve',d.settings.auto_approve?'<span style="color:var(--ok)">ON</span>':'<span style="color:var(--dim)">off</span>','trust '+trust+' · '+(d.settings.paused?'PAUSED':'running'));
+ // sparklines
+ spark('c-subs',d.history.map(x=>x.subs));spark('c-views',d.history.map(x=>x.views));
+ document.getElementById('subs-note').textContent=d.history.length+' days of history';
+ document.getElementById('views-note').textContent=d.history.length+' days of history';
+ // hooks
+ const hs=d.hooks.slice(-12).reverse().map(x=>{
+  const c=x.score>=80?'hi':x.score>=60?'mid':'lo';
+  return '<div><span class="score '+c+'">'+x.score+'</span> — '+esc(x.reason||x.id)+'</div>'}).join('');
+ document.getElementById('hooks').innerHTML=hs||'<div>(no scores yet)</div>';
+ // trust bar
+ document.getElementById('trust').innerHTML='Approvals: <b>'+d.settings.approved+'</b>/10'+
+  '<div class="bar"><i style="width:'+(d.settings.approved*10)+'%"></i></div>'+
+  '<p class="muted" style="margin-top:6px">'+(d.settings.auto_approve?'Auto-approve is ON — new videos publish themselves after render.':'10 manual ✅s enable auto-approve.')+'</p>';
+ // queue
+ let q='<table><tr><th></th><th>id</th><th>type</th><th>status</th><th>age</th><th>title</th></tr>';
+ if(!d.jobs.length)q+='<tr><td colspan="6" class="muted">Queue empty — make a video from the Tools tab</td></tr>';
+ for(const j of d.jobs.slice(-15).reverse()){
+  q+='<tr><td class="st-'+j.status+'">'+({pending:'⏳',claimed:'🔧',done:'✅',failed:'❌'}[j.status]||'❓')+'</td><td><code>'+j.id.slice(0,8)+'</code></td><td>'+j.type+'</td><td class="st-'+j.status+'">'+j.status+'</td><td>'+j.age+'m</td><td>'+esc(j.title)+'</td></tr>'}
+ document.getElementById('queue').innerHTML=q+'</table>';
+ // videos table
+ let v='';
+ if(!d.videos.length)v='<tr><td colspan="7" class="muted">No videos yet</td></tr>';
+ for(const x of d.videos){
+  v+='<tr><td><a href="https://youtu.be/'+x.id+'" target="_blank">'+esc(x.title.slice(0,52))+'</a></td>'+
+  '<td><span class="badge '+(x.privacy==='public'?'pub':'priv')+'">'+x.privacy+'</span></td>'+
+  '<td><b>'+fmt(x.views)+'</b></td><td>'+fmt(x.likes)+'</td><td>'+fmt(x.comments)+'</td><td class="muted">'+x.published+'</td>'+
+  '<td>'+(x.privacy!=='public'?'<button class="btn sm" onclick="act(\'vpub:'+x.id+'\')">Make public</button>':'')+
+  ' <button class="btn ghost sm" onclick="act(\'vpriv:'+x.id+'\')">Private</button></td></tr>'}
+ document.getElementById('vidbody').innerHTML=v;
+ // pending
+ let ph='';
+ if(!d.pending.length)ph='<p class="muted">Nothing awaiting decision. Renders land here automatically.</p>';
+ for(const x of d.pending){
+  ph+='<div class="videorow"><a href="'+x.url+'" target="_blank">🎬 '+esc(x.title)+'</a>'+
+   '<span class="badge">'+x.formats+' formats</span><span class="muted">'+x.alts+' alt titles</span><span class="grow"></span>'+
+   '<button class="btn" onclick="act(\'publish:'+x.id+'\')">✅ Publish</button>'+
+   '<button class="btn ghost" style="background:#4a1a1a" onclick="if(confirm(\'Delete from YouTube permanently?\'))act(\'reject:'+x.id+'\')">❌ Delete</button></div>';
+  if(x.alts)for(let i=0;i<x.alts.length;i++)
+   ph+='<div class="videorow" style="padding-left:24px"><span class="muted">alt '+(i+2)+':</span> <span>'+esc(x.alts[i])+'</span><span class="grow"></span><button class="btn ghost sm" onclick="act(\'retitle:'+x.id+':'+i+'\')">Use this title</button></div>';
+ }
+ document.getElementById('pending').innerHTML=ph;
+ // tools
+ document.getElementById('direction').textContent=d.direction||'(no growth analysis yet — accumulates after ~3 public videos)';
+ document.getElementById('topics').textContent=d.used_topics.join(' · ')||'(none)';
+ // log
+ document.getElementById('log').innerHTML=d.log.map(l=>{
+  const m=l.match(/^(\d\d:\d\d:\d\d)(.*)$/);return m?'<div><span class="t">'+m[1]+'</span>'+esc(m[2])+'</div>':'<div>'+esc(l)+'</div>'}).join('');
+}
+function spark(id,arr){
+ const c=document.getElementById(id);if(!c||arr.length<2){if(c)c.getContext('2d').clearRect(0,0,c.width,c.height);return}
+ c.width=c.offsetWidth*2;c.height=240;const g=c.getContext('2d');
+ const min=Math.min(...arr),max=Math.max(...arr),rg=(max-min)||1;
+ g.strokeStyle='#b21818';g.lineWidth=4;g.beginPath();
+ arr.forEach((v,i)=>{const x=i/(arr.length-1)*(c.width-20)+10,y=220-(v-min)/rg*190;i?g.lineTo(x,y):g.moveTo(x,y)});
+ g.stroke();
+ g.fillStyle='#b21818';arr.forEach((v,i)=>{const x=i/(arr.length-1)*(c.width-20)+10,y=220-(v-min)/rg*190;
+  g.beginPath();g.arc(x,y,5,0,7);g.fill()});
+}
+function sortV(k){VIDSORT.asc=VIDSORT.k===k?!VIDSORT.asc:false;VIDSORT.k=k;
+ DATA.videos.sort((a,b)=>{const x=a[VIDSORT.k],y=b[VIDSORT.k];
+  return (typeof x=='number'?x-y:String(x).localeCompare(String(y)))*(VIDSORT.asc?1:-1)});render()}
+async function idea(){
+ const t=document.getElementById('idea').value.trim();if(!t)return toast('Type a topic first');
+ toast('Writing script…');
+ const r=await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'idea',topic:t})});
+ const d=await r.json();toast(d.ok?'Script queued — rendering soon':'Failed: '+(d.error||''),d.ok);
+ if(d.ok)document.getElementById('idea').value='';
+ load();
+}
+async function act(a){
+ const r=await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:a})});
+ const d=await r.json();
+ if(d.ok===false){toast('❌ '+(d.error||'failed'));return}
+ const nice={next:'New video queued',publish:'Published',retry:(d.requeued||0)+' requeued',pause:'Paused',resume:'Resumed',
+  clear_failed:'Failed jobs cleared',clear_all:'Everything cleared',reset:'Counter reset',toggle_auto:'Auto-approve toggled',
+  refresh_channel:'Channel data refreshed',idea:'Script queued'};
+ if(a.startsWith('publish:'))toast('Published ✅',1);
+ else if(a.startsWith('reject:'))toast('Deleted 🗑');
+ else if(a.startsWith('vpub:'))toast('Video public',1);
+ else if(a.startsWith('vpriv:'))toast('Video private');
+ else if(a.startsWith('retitle:'))toast('Title updated ✏️',1);
+ else toast(nice[a]||'Done',1);
+ load();
+}
+load();setInterval(()=>{if(!PAUSED)load()},15000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!PAUSED)load()});
 </script></body></html>"""
+
+
+_channel_cache = {"t": 0, "data": None}
+
+
+def _channel_snapshot():
+    """Channel + video data with a 5-minute server cache — the panel
+    auto-refreshes every 15s and must not burn YouTube quota."""
+    import time as _t
+    if (_t.time() - _channel_cache["t"]) < 300 and _channel_cache["data"]:
+        return _channel_cache["data"]
+    try:
+        ch = yt.channel_stats() or {}
+        vids = yt.my_videos(30)
+        data = {"ch": ch, "vids": vids}
+        _channel_cache.update(t=_t.time(), data=data)
+        return data
+    except Exception:
+        return _channel_cache["data"] or {"ch": {}, "vids": []}
 
 
 @app.route("/panel")
 def panel():
-    if _panel_ok():
-        return PANEL_HTML
-    return PANEL_HTML  # login screen; JS gates the data behind auth
+    return PANEL_HTML
 
 
 @app.route("/api/state")
 def api_state():
-    if not _panel_ok():
-        return jsonify({"error": "unauthorized"}), 403
     state.default_state()
     import time as _t
     w = state.STATE.get("worker", {})
@@ -299,41 +456,60 @@ def api_state():
                        .total_seconds() // 60)
         except Exception:
             pass
-    try:
-        ch = yt.channel_stats() or {"title": "?", "subs": 0, "views": 0,
-                                    "videos": 0}
-    except Exception:
-        ch = {"title": "unavailable", "subs": 0, "views": 0, "videos": 0}
-    jobs = state.STATE.get("jobs", [])
+    snap = _channel_snapshot()
+    ch = snap["ch"]
+    vids = snap["vids"]
+    hist = state.STATE.get("stats_history", [])
+    today = None
+    delta = {}
+    if len(hist) >= 2:
+        delta = {"subs": hist[-1]["subs"] - hist[-2]["subs"],
+                 "views": hist[-1]["views"] - hist[-2]["views"]}
+    jobs_list = state.STATE.get("jobs", [])
     now = _t.time()
     s = state.STATE["settings"]
+    pending_detail = []
+    for uid, p in state.STATE["pending_videos"].items():
+        pending_detail.append({
+            "id": uid, "title": p.get("title", "?"),
+            "url": p.get("video_url", ""),
+            "alts": (p.get("title_alternatives") or [])[:2],
+            "formats": len(p.get("video_urls") or [1]),
+        })
     return jsonify({
-        "channel": ch,
-        "queue": {"pending": sum(1 for j in jobs if j["status"] == "pending")},
-        "awaiting": len(state.STATE["pending_videos"]),
+        "channel": {"title": ch.get("title", "?"),
+                    "subs": ch.get("subs", 0), "views": ch.get("views", 0),
+                    "videos": ch.get("videos", len(vids)),
+                    "public": sum(1 for v in vids if v["privacy"] == "public"),
+                    "private": sum(1 for v in vids if v["privacy"] != "public")},
+        "delta": delta,
+        "videos": vids,
+        "history": hist[-30:],
+        "hooks": state.STATE.get("hook_scores", [])[-30:],
+        "queue": {"pending": sum(1 for j in jobs_list if j["status"] == "pending"),
+                  "claimed": sum(1 for j in jobs_list if j["status"] == "claimed"),
+                  "failed": sum(1 for j in jobs_list if j["status"] == "failed"),
+                  "awaiting": len(state.STATE["pending_videos"])},
         "settings": {"auto_approve": s.get("auto_approve"),
                      "approved": s.get("approved_count", 0),
                      "paused": s.get("paused")},
         "worker": {"mins_ago": mins},
         "uptime": f"{int(_t.time() - STARTED_AT) // 3600}h "
                   f"{(int(_t.time() - STARTED_AT) % 3600) // 60}m",
-        "pending": [{"id": uid, "title": p.get("title", "?"),
-                     "url": p.get("video_url", ""),
-                     "alts": len(p.get("title_alternatives") or [])}
-                    for uid, p in state.STATE["pending_videos"].items()],
+        "pending": pending_detail,
         "jobs": [{"id": j["id"], "type": j["type"], "status": j["status"],
                   "age": int((now - j.get("created", now)) / 60),
                   "title": (j.get("script", {}).get("title") or
                             j.get("result", {}).get("msg", ""))[:60]}
-                 for j in jobs],
-        "log": comms.LOG[-20:],
+                 for j in jobs_list],
+        "direction": state.STATE.get("topic_direction", ""),
+        "used_topics": state.STATE.get("used_topics", [])[-25:],
+        "log": comms.LOG[-25:],
     })
 
 
 @app.route("/api/action", methods=["POST"])
 def api_action():
-    if not _panel_ok():
-        return jsonify({"error": "unauthorized"}), 403
     state.default_state()
     data = request.get_json(force=True, silent=True) or {}
     a = data.get("action", "")
@@ -341,14 +517,32 @@ def api_action():
     if a == "next":
         comms.send("Writing a script… (from panel)")
         made = brain.queue_next_video(1)
-        return jsonify({"ok": bool(made)})
+        return jsonify({"ok": bool(made),
+                        "error": "" if made else "script generation failed"})
+    if a == "idea":
+        topic = (data.get("topic") or "").strip()
+        if not topic:
+            return jsonify({"ok": False, "error": "empty topic"}), 400
+        comms.typing()
+        script = brain.generate_script(
+            direction=f"Topic requested by the channel owner: {topic}")
+        if not script:
+            return jsonify({"ok": False, "error": "generation failed"})
+        import uuid as _uuid
+        job = jobs.add_job("render", {"script": script,
+                                      "approval_id": _uuid.uuid4().hex[:10]})
+        cloud.wake_soon("render")
+        state.STATE.setdefault("used_topics", []).append(script.get("id", "?"))
+        state.save_soon()
+        comms.send(f"🎬 <b>Custom video queued</b> — "
+                   f"{comms.esc(script['title'])}", html=True)
+        return jsonify({"ok": True, "job_id": job["id"]})
     if a == "publish":
         _publish_pending()
         return jsonify({"ok": True})
     if a.startswith("publish:"):
         uid = a.split(":", 1)[1]
-        p = state.STATE["pending_videos"].get(uid)
-        if p:
+        if uid in state.STATE["pending_videos"]:
             s_ = state.STATE["settings"]
             s_["approved_count"] = s_.get("approved_count", 0) + 1
             _publish_now(uid)
@@ -357,6 +551,44 @@ def api_action():
     if a.startswith("reject:"):
         _delete_pending(a.split(":", 1)[1])
         return jsonify({"ok": True})
+    if a.startswith("retitle:"):
+        _, vid, idx = a.split(":", 2)
+        p = state.STATE["pending_videos"].get(vid)
+        if p:
+            alts = p.get("title_alternatives") or []
+            i = int(idx)
+            if 0 <= i < len(alts):
+                try:
+                    for url in (p.get("video_urls")
+                                or [p.get("video_url")]):
+                        if url:
+                            yt.update_title(
+                                url.rstrip("/").split("/")[-1], alts[i])
+                    p["title"] = alts[i]
+                    state.save_soon()
+                    return jsonify({"ok": True})
+                except Exception as e:
+                    return jsonify({"ok": False, "error": str(e)[:120]})
+        return jsonify({"ok": False, "error": "not found"})
+    if a.startswith("vpub:"):
+        try:
+            yt.make_public(f"https://youtu.be/{a.split(':', 1)[1]}")
+            _channel_cache.update(t=0)
+            return jsonify({"ok": True})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)[:120]})
+    if a.startswith("vpriv:"):
+        try:
+            yt.make_private(f"https://youtu.be/{a.split(':', 1)[1]}")
+            _channel_cache.update(t=0)
+            return jsonify({"ok": True})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)[:120]})
+    if a == "toggle_auto":
+        s_ = state.STATE["settings"]
+        s_["auto_approve"] = not s_.get("auto_approve")
+        state.save_soon()
+        return jsonify({"ok": True, "now": s_["auto_approve"]})
     if a == "retry":
         state.reload_jobs()
         n = 0
@@ -394,6 +626,9 @@ def api_action():
         s_["approved_count"] = 0
         s_["auto_approve"] = False
         state.save_now()
+        return jsonify({"ok": True})
+    if a == "refresh_channel":
+        _channel_cache.update(t=0)
         return jsonify({"ok": True})
     return jsonify({"ok": False, "error": f"unknown action {a!r}"}), 400
 

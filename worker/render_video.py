@@ -284,9 +284,12 @@ def pick_scenes(script, fmt, audio_durations):
         # "subscribe" line wastes 2-4s and reads as template
         chosen, total = [], audio_durations.get(
             "hookshort", audio_durations.get("hook", 0.0))
+        # hard 20s scene budget after the hook: the trimmed hook runs
+        # 5-10s, scenes are 8-12s each → 1-2 scenes → 18-25s total.
+        # (A softer 25s cap let 4+ scenes stack to 45s+.)
         for idx, s in enumerate(scenes):
             d = audio_durations.get(f"scene{idx}", 0)
-            if s.get("in_short", True) and (total + d < 25 or not chosen):
+            if s.get("in_short", True) and (total + d < 20 or not chosen):
                 chosen.append((f"scene{idx}", s))
                 total += d
         return [("hookshort", {"narration": short_hook_text(script),

@@ -24,6 +24,19 @@ log = setup_logging("archives")
 ARCHIVES = CACHE / "archives"
 UA = {"User-Agent": "FOOTNOTE-channel-pipeline/1.0 (documentary research)"}
 
+# polite global pacing between ALL Commons requests (searches AND
+# downloads): a full render fires dozens of them and Wikimedia's
+# per-client burst limiter is strict
+_last_commons_req = [0.0]
+COMMONS_MIN_INTERVAL = 1.0  # seconds between Commons hits
+
+
+def _commons_pace():
+    wait = COMMONS_MIN_INTERVAL - (time.monotonic() - _last_commons_req[0])
+    if wait > 0:
+        time.sleep(wait)
+    _last_commons_req[0] = time.monotonic()
+
 # licenses safe for monetized YouTube (everything on Commons is free,
 # but we record the exact license string for the credits block)
 OK_LICENSE_RE = re.compile(
@@ -56,18 +69,28 @@ def search_commons(query, max_images=4, min_width=640):
 
     results = []
     try:
-        r = requests.get(
-            "https://commons.wikimedia.org/w/api.php",
-            params={
-                "action": "query", "format": "json",
-                "generator": "search",
-                "gsrsearch": f"filetype:bitmap {query}",
-                "gsrnamespace": 6, "gsrlimit": max_images * 3,
-                "prop": "imageinfo",
-                "iiprop": "url|size|mime|extmetadata",
-                "iiurlwidth": 1920,
-            },
-            headers=UA, timeout=30)
+        # search with 429 backoff: a 10-scene script fires ~20 archive
+        # searches in quick succession and Wikimedia rate-limits bursts
+        # (the Bell Witch run lost most of its searches to this)
+        r = None
+        for attempt in (1, 2, 3):
+            _commons_pace()
+            r = requests.get(
+                "https://commons.wikimedia.org/w/api.php",
+                params={
+                    "action": "query", "format": "json",
+                    "generator": "search",
+                    "gsrsearch": f"filetype:bitmap {query}",
+                    "gsrnamespace": 6, "gsrlimit": max_images * 3,
+                    "prop": "imageinfo",
+                    "iiprop": "url|size|mime|extmetadata",
+                    "iiurlwidth": 1920,
+                },
+                headers=UA, timeout=30)
+            if r.status_code == 429:
+                time.sleep(2 * attempt)  # back off, then retry the search
+                continue
+            break
         r.raise_for_status()
         pages = (r.json().get("query") or {}).get("pages") or {}
         for p in sorted(pages.values(),
@@ -92,6 +115,7 @@ def search_commons(query, max_images=4, min_width=640):
             dest = d / f"commons_{p['pageid']}.jpg"
             if not dest.exists():
                 for attempt in (1, 2):
+                    _commons_pace()
                     rr = requests.get(url, headers=UA, timeout=60)
                     if rr.status_code == 429 and attempt == 1:
                         time.sleep(3)  # wikimedia rate-limits bursts

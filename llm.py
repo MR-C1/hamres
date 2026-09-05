@@ -54,6 +54,13 @@ def _gemini(prompt, system, max_tokens):
                     comms.log(f"gemini key ...{key[-6:]} quota-hit — "
                               f"rotating to next key")
                     break
+                if "401" in msg or "UNAUTHENTICATED" in msg or "403" in msg:
+                    # THIS key is invalid/dead (typo, revoked, wrong
+                    # project) — trying more models with it is pointless;
+                    # rotate to the next key immediately
+                    comms.log(f"gemini key ...{key[-6:]} rejected (401/403) "
+                              f"— rotating to next key")
+                    break
                 comms.log(f"gemini {model} failed: {msg[:80]}")
     raise RuntimeError(f"all gemini models failed: {last_err}")
 

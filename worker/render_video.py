@@ -395,21 +395,30 @@ def render_from_dict(script, config):
             d = durations[bid] + 0.35  # small pause between blocks
             kws = s.get("visual_keywords", [])
 
-            # REAL archival first: photos/documents of the actual
-            # people, places and evidence — the documentary layer.
-            # Stock footage is the fallback when nothing real exists.
-            arch_pool, seen_paths = [], set()
-            for term in s.get("archive_search", []):
-                for a in archives.search_commons(term):
-                    if a["path"] not in seen_paths:
-                        seen_paths.add(a["path"])
-                        arch_pool.append(a)
-            if arch_pool:
-                pick = arch_pool[scene_no % len(arch_pool)]
-                visual = still_visual(pick["path"], d, w, h)
-                credits.append(pick)
-            else:
-                visual = None
+            # REAL archival, in documentary order: period FOOTAGE of the
+            # actual event (newsreels, government film) → real PHOTOS/
+            # documents → stock footage only when nothing real exists.
+            visual = None
+            terms = s.get("archive_search", [])
+            for term in terms[:1]:
+                vids = archives.search_archive_video(term)
+                if vids:
+                    pick = vids[scene_no % len(vids)]
+                    visual = scene_visual([Path(pick["path"])], d, w, h,
+                                          motion=(fmt == "short"))
+                    credits.append(pick)
+                    break
+            if visual is None:
+                arch_pool, seen_paths = [], set()
+                for term in terms:
+                    for a in archives.search_commons(term):
+                        if a["path"] not in seen_paths:
+                            seen_paths.add(a["path"])
+                            arch_pool.append(a)
+                if arch_pool:
+                    pick = arch_pool[scene_no % len(arch_pool)]
+                    visual = still_visual(pick["path"], d, w, h)
+                    credits.append(pick)
 
             # pool: this scene's keyword clips, deduped
             clips, seen = [], set()

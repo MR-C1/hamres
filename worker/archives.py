@@ -115,3 +115,103 @@ def search_commons(query, max_images=4, min_width=640):
     if results:
         log.info("archives: %d real images for '%s'", len(results), query)
     return results
+
+
+# archive.org period footage — Prelinger / FedFlix are curated
+# public-domain film collections (newsreels, war footage, era film)
+PD_COLLECTIONS = "(prelinger OR fedflix)"
+VIDEO_MAX_BYTES = 120 << 20   # skip whole-movie rips; we want clips/reels
+
+
+def search_archive_video(query, max_clips=3):
+    """Search archive.org's public-domain film collections for real
+    period FOOTAGE (newsreels, government film, war photography).
+    Returns [{title, page, license, author, path}] like search_commons,
+    cached per query. Sparse by nature — famous events hit, obscure
+    cases return nothing (then stills/stock take over)."""
+    d = _cache_dir("video:" + query)
+    marker = d / "done.json"
+    if marker.exists():
+        cached = json.loads(marker.read_text(encoding="utf-8"))
+        return [c for c in cached if Path(c["path"]).exists()]
+
+    results = []
+    try:
+        # TITLE-phrase match, not full-text: archive.org's full-text
+        # search matches loose description words ("nuclear test" returned
+        # 1950s classroom films) — an unrelated film over the narration
+        # is worse than stock, so precision beats recall here
+        r = requests.get(
+            "https://archive.org/advancedsearch.php",
+            params={
+                "q": f'title:("{query}") AND mediatype:movies '
+                     f"AND collection:{PD_COLLECTIONS}",
+                "fl[]": ["identifier", "title", "year"],
+                "rows": max_clips * 4, "page": 1, "output": "json",
+            },
+            headers=UA, timeout=30)
+        r.raise_for_status()
+        docs = (r.json().get("response") or {}).get("docs") or []
+        # client-side relevance check: a significant query word must
+        # appear in the item title (archive.org phrase match is fuzzy)
+        words = [w for w in query.lower().split() if len(w) > 3]
+        for doc in docs:
+            if len(results) >= max_clips:
+                break
+            title = (doc.get("title") or "")
+            if words and not any(w in title.lower() for w in words):
+                continue
+            ident = doc.get("identifier")
+            if not ident:
+                continue
+            m = requests.get(f"https://archive.org/metadata/{ident}",
+                             headers=UA, timeout=30)
+            m.raise_for_status()
+            meta = m.json()
+            # pick the smallest playable mp4-ish file
+            best = None
+            for f in meta.get("files", []):
+                fmt = (f.get("format") or "").lower()
+                name = (f.get("name") or "").lower()
+                if not (name.endswith((".mp4", ".m4v"))
+                        or "mpeg4" in fmt or "h.264" in fmt):
+                    continue
+                try:
+                    size = int(f.get("size") or 0)
+                except ValueError:
+                    continue
+                if not (2 << 20 < size <= VIDEO_MAX_BYTES):
+                    continue
+                if best is None or size < best[1]:
+                    best = (f["name"], size)
+            if not best:
+                continue
+            fname, _size = best
+            import urllib.parse
+            url = (f"https://archive.org/download/{ident}/"
+                   + urllib.parse.quote(fname))
+            dest = d / f"ia_{ident}_{Path(fname).stem}.mp4"
+            if not dest.exists():
+                rr = requests.get(url, headers=UA, timeout=600)
+                rr.raise_for_status()
+                if len(rr.content) < 1 << 20:
+                    continue
+                dest.write_bytes(rr.content)
+            results.append({
+                "title": _clean(doc.get("title") or ident),
+                "page": f"https://archive.org/details/{ident}",
+                "license": "Public domain"
+                           f" (archive.org {meta.get('metadata', {}).get('collection', 'collection')})",
+                "author": _clean(meta.get("metadata", {})
+                                 .get("creator", "archive.org")),
+                "path": str(dest),
+            })
+            time.sleep(0.5)
+    except Exception as e:
+        log.warning("archive.org video search failed for '%s': %s",
+                    query, e)
+
+    marker.write_text(json.dumps(results), encoding="utf-8")
+    if results:
+        log.info("archives: %d period films for '%s'", len(results), query)
+    return results

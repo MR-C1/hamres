@@ -43,7 +43,8 @@ SCRIPT_PROMPT = """Write ONE video script for a faceless YouTube facts/mystery c
   "hook": "80-120 words. A cinematic COLD-OPEN vignette: drop the viewer INTO the single most striking moment of the story (a date, a place, a person mid-crisis). No greeting, no channel intro, no context. End on the framing question the whole video answers.",
   "scenes": [
     {{"narration": "90-140 words, conversational, fast, surprising.",
-      "visual_keywords": ["2-3 stock-footage search phrases"],
+      "archive_search": ["1-2 real-world archival photo searches"],
+      "visual_keywords": ["2-3 stock-footage search phrases (fallback)"],
       "source": "short real citation anchoring this scene's central fact",
       "in_short": true}}
   ],
@@ -62,6 +63,14 @@ STRUCTURE (this is a mini-documentary, not a list of facts):
   escalates.
 - Mark the 3 most visual scenes "in_short": true. All facts true, verifiable,
   and specific (dates, numbers, names).
+- ARCHIVAL (this is a DOCUMENTARY): every scene names real searchable
+  subjects in "archive_search" — exact names of the people, places,
+  objects, documents or newspaper pages the narration mentions, phrased
+  as a Wikimedia Commons search ("Isdal Woman belongings", "Somerton Man
+  rubaiyat", "Utah 1947 newspaper", "Bob Lazar", "Dyatlov Pass tent").
+  Real photos of the actual subject are used FIRST; the stock-footage
+  keywords are only the fallback when no real image exists. Never invent
+  an archive subject that wouldn't exist.
 - SOURCES: at least half the scenes carry a "source" field — a SHORT real
   citation for that scene's central fact, like "FBI file 49-49395, 1947",
   "Nature, vol 576, 2019", "Strasbourg city archives". Never fabricate a

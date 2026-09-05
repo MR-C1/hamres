@@ -15,6 +15,7 @@ from moviepy import (AudioFileClip, CompositeAudioClip, CompositeVideoClip,
 from moviepy.audio.fx import AudioLoop, MultiplyVolume
 from moviepy.video.fx import Crop, Resize
 
+import archives
 import tts as tts_mod
 import visuals
 from captions import render_caption_images
@@ -254,6 +255,17 @@ def short_hook_text(script):
     return cut
 
 
+def still_visual(path, duration, w, h, zoom=0.13):
+    """Documentary Ken Burns: a slow zoom over a REAL archival still —
+    the actual case photo, portrait, document, or newspaper scan."""
+    base = ImageClip(str(path)).with_duration(duration)
+    scale0 = max(w / base.w, h / base.h) * 1.02
+    scaled = base.resized(
+        lambda t: scale0 * (1 + zoom * (t / max(duration, 0.1))))
+    return CompositeVideoClip([scaled.with_position("center")],
+                              size=(w, h))
+
+
 def pick_scenes(script, fmt, audio_durations):
     """Which narration blocks go into which format.
 
@@ -344,6 +356,7 @@ def render_from_dict(script, config):
     durations = {k: AudioFileClip(str(mp3)).duration for k, (mp3, _) in audio.items()}
 
     outputs = []
+    credits = []      # archival attributions for the description
     blocks_long = []  # long-form scene order, for the description chapters
     for fmt, w, h in [("short", rconf["short_width"], rconf["short_height"]),
                       ("long", rconf["long_width"], rconf["long_height"])]:
@@ -382,6 +395,22 @@ def render_from_dict(script, config):
             d = durations[bid] + 0.35  # small pause between blocks
             kws = s.get("visual_keywords", [])
 
+            # REAL archival first: photos/documents of the actual
+            # people, places and evidence — the documentary layer.
+            # Stock footage is the fallback when nothing real exists.
+            arch_pool, seen_paths = [], set()
+            for term in s.get("archive_search", []):
+                for a in archives.search_commons(term):
+                    if a["path"] not in seen_paths:
+                        seen_paths.add(a["path"])
+                        arch_pool.append(a)
+            if arch_pool:
+                pick = arch_pool[scene_no % len(arch_pool)]
+                visual = still_visual(pick["path"], d, w, h)
+                credits.append(pick)
+            else:
+                visual = None
+
             # pool: this scene's keyword clips, deduped
             clips, seen = [], set()
             for kw in kws:
@@ -389,23 +418,23 @@ def render_from_dict(script, config):
                     if c.name not in seen:
                         seen.add(c.name)
                         clips.append(c)
-            # VARIETY: prefer clips not used by earlier scenes, then rotate
-            # the order per scene so even a small pool doesn't repeat the
-            # same first clip every time
-            fresh = [c for c in clips if c.name not in used_clips]
-            stale = [c for c in clips if c.name in used_clips]
-            ordered = fresh + stale
-            if ordered and scene_no:
-                rot = scene_no % len(ordered)
-                ordered = ordered[rot:] + ordered[:rot]
-            used_clips.update(c.name for c in ordered[:3])
-            # Ken Burns motion on SHORTS only (where it fights the feed
-            # scroll); long-form keeps static crops + crossfades — the
-            # animated resize costs ~3.4x render time, which turns an
-            # 8-12 min long into a 4-hour cloud job instead of ~1.5h
-            visual = scene_visual(ordered, d, w, h,
-                                  label=kws[0] if kws else "",
-                                  motion=(fmt == "short"))
+            if visual is None:
+                # VARIETY: prefer clips not used by earlier scenes, then
+                # rotate the order per scene so even a small pool doesn't
+                # repeat the same first clip every time
+                fresh = [c for c in clips if c.name not in used_clips]
+                stale = [c for c in clips if c.name in used_clips]
+                ordered = fresh + stale
+                if ordered and scene_no:
+                    rot = scene_no % len(ordered)
+                    ordered = ordered[rot:] + ordered[:rot]
+                used_clips.update(c.name for c in ordered[:3])
+                # Ken Burns motion on SHORTS only (where it fights the
+                # feed scroll); long-form keeps static crops — animated
+                # resize costs ~3.4x render time on an 8-12 min long
+                visual = scene_visual(ordered, d, w, h,
+                                      label=kws[0] if kws else "",
+                                      motion=(fmt == "short"))
             video_layers.append(visual.with_start(t).with_duration(d))
             audio_clips.append(AudioFileClip(str(mp3)).with_start(t + 0.1))
             scene_no += 1
@@ -484,10 +513,14 @@ def render_from_dict(script, config):
             " ".join(s.get("narration", "").split()[:6]) + "…")
         chapters.append(f"{int(t // 60)}:{int(t % 60):02d} {label}")
         t += durations.get(bid, 0) + 0.35
+    credit_lines = [
+        f"{c['title']} by {c['author']} ({c['license']}) {c['page']}"
+        for c in credits]
     meta = (f"title: {script['title']}\n"
             f"description: {desc}\n"
             f"tags: {', '.join(script.get('tags', []))}\n"
             f"chapters: {'|'.join(chapters)}\n"
+            f"credits: {'|'.join(credit_lines)}\n"
             f"id: {sid}\n")
     (REVIEW / f"{sid}_metadata.txt").write_text(meta, encoding="utf-8")
     log.info("done: %s", ", ".join(p.name for p in outputs))

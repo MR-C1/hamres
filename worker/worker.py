@@ -161,9 +161,14 @@ def _enrich_meta(script, meta):
     # chapters come from the renderer as pipe-separated "M:SS Label" entries
     chapters = [c.strip() for c in meta.pop("chapters", "").split("|")
                 if c.strip()]
+    # archival attributions — license compliance AND the credibility signal
+    credits = [c.strip() for c in meta.pop("credits", "").split("|")
+               if c.strip()]
     parts = [p for p in (desc.strip(), hashtags.strip()) if p]
     if chapters:
         parts.append("TIMESTAMPS\n" + "\n".join(chapters))
+    if credits:
+        parts.append("ARCHIVAL SOURCES\n" + "\n".join(credits))
     if name:
         parts.append(f"Subscribe to {name} for the details everyone else skipped.")
     # YouTube shows at most 3 hashtags above the title and treats excess

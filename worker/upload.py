@@ -7,6 +7,7 @@ Usage:
     python upload.py            # uploads everything in output/approved/
     python upload.py --dry-run  # shows what would upload, does nothing
 """
+import re
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -124,10 +125,21 @@ def validate_video(mp4):
                                f"{'; '.join(errors[:3])[:200]}")
 
 
-def find_existing(title, yt=None):
+def _iso_duration_seconds(iso):
+    """PT#H#M#S -> seconds (YouTube's contentDetails duration format)."""
+    m = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", iso or "")
+    if not m:
+        return None
+    h, mi, sec = (int(x) if x else 0 for x in m.groups())
+    return h * 3600 + mi * 60 + sec
+
+
+def find_existing(title, want_short=None, yt=None):
     """Duplicate-upload guard: if the channel already has a video with
-    this title (e.g. a re-render after a crash re-queued the job),
-    return its URL instead of uploading a second copy."""
+    this title AND the right format, return its URL instead of
+    uploading a second copy. The short and the long share a title, so
+    they are told apart by duration bucket (< 3 min = short) — absolute
+    seconds proved brittle (an 8-min long and an 11-min long differ)."""
     yt = yt or get_service()
     norm = " ".join(title.lower().split())
     try:
@@ -141,16 +153,24 @@ def find_existing(title, yt=None):
         ids = [i["contentDetails"]["videoId"] for i in r.get("items", [])]
         if not ids:
             return None
-        v = yt.videos().list(part="snippet", id=",".join(ids)).execute()
+        parts = "snippet" + (",contentDetails" if want_short is not None else "")
+        v = yt.videos().list(part=parts, id=",".join(ids)).execute()
         for item in v.get("items", []):
-            if " ".join(item["snippet"]["title"].lower().split()) == norm:
+            if " ".join(item["snippet"]["title"].lower().split()) != norm:
+                continue
+            if want_short is None:
+                return f"https://youtu.be/{item['id']}"
+            dur = _iso_duration_seconds(
+                item.get("contentDetails", {}).get("duration", ""))
+            if dur is not None and ((dur < 180) == want_short):
                 return f"https://youtu.be/{item['id']}"
     except Exception as e:
         log.warning("duplicate-check failed (continuing): %s", e)
     return None
 
 
-def upload_video(mp4, meta, config, publish_hour=None, privacy=None):
+def upload_video(mp4, meta, config, publish_hour=None, privacy=None,
+                  want_short=None):
     """Upload one video file, PRIVATE with no schedule — approval-first:
     only the owner's ✅ (brain → yt.make_public) ever makes it public.
     Returns the video URL. Used by the agent worker and the run() flow."""
@@ -158,9 +178,9 @@ def upload_video(mp4, meta, config, publish_hour=None, privacy=None):
     uconf = config.get("upload", {})
     title = meta.get("title", Path(mp4).stem)[:100]
 
-    # reconciliation: never upload a title that already exists on the
-    # channel (crash + re-queue used to produce exact duplicates)
-    existing = find_existing(title, yt)
+    # reconciliation: never upload a title+format that already exists
+    # on the channel (crash + re-queue used to produce exact duplicates)
+    existing = find_existing(title, want_short, yt)
     if existing:
         log.info("  '%s' already on channel — reusing %s", title[:50], existing)
         return existing

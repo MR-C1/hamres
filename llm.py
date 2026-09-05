@@ -49,8 +49,13 @@ def _openai_compatible(base, key, model, prompt, system, max_tokens):
     if resp.status_code != 200:
         raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:300]}")
     data = resp.json()
-    content = data["choices"][0]["message"]["content"]
-    if not content or not content.strip():
+    msg = data["choices"][0]["message"]
+    content = msg.get("content") or ""
+    if not content.strip():
+        # reasoning models (groq's gpt-oss) sometimes put the answer in
+        # the reasoning field and leave content empty on tiny prompts
+        content = msg.get("reasoning") or ""
+    if not content.strip():
         raise RuntimeError("empty content")
     return content.strip()
 

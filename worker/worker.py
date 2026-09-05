@@ -128,7 +128,11 @@ def do_render(job):
             send_video_preview(long_v, approval_id, script["title"],
                                url=up.get("video_url"))
         if sent:
-            _cleanup_files(sid)  # preview sent; intermediates unneeded
+            # cleanup errors must never fail a finished, uploaded video
+            try:
+                _cleanup_files(sid)
+            except Exception as e:
+                log.warning("cleanup failed (harmless): %s", e)
 
     result = {
         "ok": True,
@@ -197,29 +201,41 @@ def _upload_files(script, sid):
         meta.update({k: v for k, v in parsed.items() if v})
     _enrich_meta(script, meta)
 
-    urls = []
+    urls, errors = [], []
+    # the duplicate-guard tells SHORT and LONG apart by duration bucket
     for name in (f"{sid}_short.mp4", f"{sid}_long.mp4"):
         f = REVIEW / name
         if not f.exists():
             continue
-        url = upload.upload_video(f, meta, CFG)
-        urls.append(url)
-        log.info("uploaded %s -> %s", f.name, url)
+        try:
+            url = upload.upload_video(
+                f, meta, CFG, want_short=name.endswith("_short.mp4"))
+            urls.append(url)
+            log.info("uploaded %s -> %s", f.name, url)
+        except Exception as e:
+            # one format failing must not kill the other: a partial
+            # upload still gets a pending entry + working buttons, and
+            # the retry re-uploads only what is missing
+            errors.append(f"{name.rsplit('_', 1)[-1]}: {str(e)[:100]}")
+            log.warning("upload failed for %s: %s", f.name, e)
         # custom thumbnail on the long-form only (Shorts ignore it)
-        if url and name.endswith("_long.mp4"):
+        if urls and name.endswith("_long.mp4"):
             thumb = REVIEW / f"{sid}_thumb.png"
             if thumb.exists():
                 try:
-                    upload.set_thumbnail(url, thumb, CFG)
+                    upload.set_thumbnail(urls[-1], thumb, CFG)
                     log.info("thumbnail set for %s", name)
                 except Exception as e:
                     log.warning("thumbnail failed: %s", e)
-    # BOTH urls ride the report — the brain's ✅ must flip the short AND
-    # the long public, not just the first one
+    msg = "; ".join(urls)
+    if errors:
+        msg += f" | upload FAILED: {'; '.join(errors)}"
+    # whatever uploaded rides the report — partial success still
+    # registers a pending entry so the buttons work
     return {"video_url": urls[0] if urls else "",
             "video_urls": urls,
             "title": script["title"] if urls else "",
-            "msg": "; ".join(urls)}
+            "msg": msg}
 
 
 def _cleanup_files(sid):

@@ -5,6 +5,7 @@ Usage:
     python render_video.py <path-to-script.json>
 """
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -240,6 +241,19 @@ def scene_visual(clips, duration, w, h, label="", motion=True):
                                   padding=-0.25)
 
 
+def short_hook_text(script):
+    """The trimmed hook used by the Shorts format (see render_from_dict)."""
+    import re as _re
+    if len(script["hook"].split()) <= 22:
+        return script["hook"]
+    cut = ""
+    for sent in _re.split(r"(?<=[.!?])\s+", script["hook"]):
+        if cut and len((cut + " " + sent).split()) > 22:
+            break
+        cut = (cut + " " + sent).strip()
+    return cut
+
+
 def pick_scenes(script, fmt, audio_durations):
     """Which narration blocks go into which format.
 
@@ -256,14 +270,15 @@ def pick_scenes(script, fmt, audio_durations):
         # completion-per-second is the distribution currency. The hook
         # is always block 1 (cold open); no outro in shorts — a
         # "subscribe" line wastes 2-4s and reads as template
-        chosen, total = [], audio_durations.get("hook", 0.0)
+        chosen, total = [], audio_durations.get(
+            "hookshort", audio_durations.get("hook", 0.0))
         for idx, s in enumerate(scenes):
             d = audio_durations.get(f"scene{idx}", 0)
             if s.get("in_short", True) and (total + d < 25 or not chosen):
                 chosen.append((f"scene{idx}", s))
                 total += d
-        return [("hook", {"narration": script["hook"],
-                          "visual_keywords": hook_visuals})] + chosen
+        return [("hookshort", {"narration": short_hook_text(script),
+                                "visual_keywords": hook_visuals})] + chosen
     else:
         blocks += [(f"scene{i}", s) for i, s in enumerate(scenes)]
         if script.get("outro"):
@@ -314,6 +329,17 @@ def render_from_dict(script, config):
     if script.get("outro"):
         audio["outro"] = tts_mod.tts(f"{sid}_outro", script["outro"],
                                      vconf["long"], vconf.get("rate", "+0%"))
+
+    # SHORTS HOOK TRIM: the 8-12 min format's cold-open hook is 80-120
+    # words (~40-60s of audio) — used raw it blows the 25s Shorts budget
+    # and every Short lands at 70-90s. The Short opens on the hook's
+    # first sentence(s) instead.
+    short_hook = short_hook_text(script)
+    if short_hook and short_hook != script["hook"]:
+        audio["hookshort"] = tts_mod.tts(f"{sid}_hookshort", short_hook,
+                                         vconf["long"], vconf.get("rate", "+0%"))
+    elif short_hook:
+        audio["hookshort"] = audio["hook"]
 
     durations = {k: AudioFileClip(str(mp3)).duration for k, (mp3, _) in audio.items()}
 

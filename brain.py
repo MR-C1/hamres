@@ -44,6 +44,7 @@ SCRIPT_PROMPT = """Write ONE video script for a faceless YouTube facts/mystery c
   "hook": "80-120 words. A cinematic COLD-OPEN vignette: drop the viewer INTO the single most striking moment of the story (a date, a place, a person mid-crisis). No greeting, no channel intro, no context. End on the framing question the whole video answers.",
   "scenes": [
     {{"narration": "90-140 words, conversational, fast, surprising.",
+      "short_narration": "ONLY on in_short scenes: 40-60 words — the scene's punchiest core, rewritten tight for the Short",
       "archive_search": ["2-4 real-world archival photo searches"],
       "visual_keywords": ["2-3 stock-footage search phrases (fallback)"],
       "source": "short real citation anchoring this scene's central fact",

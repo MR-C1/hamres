@@ -284,14 +284,24 @@ def pick_scenes(script, fmt, audio_durations):
         # "subscribe" line wastes 2-4s and reads as template
         chosen, total = [], audio_durations.get(
             "hookshort", audio_durations.get("hook", 0.0))
-        # hard 20s scene budget after the hook: the trimmed hook runs
-        # 5-10s, scenes are 8-12s each → 1-2 scenes → 18-25s total.
-        # (A softer 25s cap let 4+ scenes stack to 45s+.)
+        # Shorts are built from the trimmed hook + the in_short scenes'
+        # SHORT narrations (40-60 words) when present — full scenes run
+        # 30-40s and can never fit (one full scene = a 46s Short).
+        # Legacy scripts without short_narration take at most ONE full
+        # scene, budget be damned.
         for idx, s in enumerate(scenes):
-            d = audio_durations.get(f"scene{idx}", 0)
-            if s.get("in_short", True) and (total + d < 20 or not chosen):
-                chosen.append((f"scene{idx}", s))
-                total += d
+            if not s.get("in_short", True):
+                continue
+            if s.get("short_narration"):
+                d = audio_durations.get(f"shortscene{idx}", 0)
+                if total + d < 20 or not chosen:
+                    chosen.append((f"shortscene{idx}", s))
+                    total += d
+            else:
+                d = audio_durations.get(f"scene{idx}", 0)
+                if total + d < 20 or not chosen:
+                    chosen.append((f"scene{idx}", s))
+                    total += d
         return [("hookshort", {"narration": short_hook_text(script),
                                 "visual_keywords": hook_visuals})] + chosen
     else:
@@ -355,6 +365,16 @@ def render_from_dict(script, config):
                                          vconf["long"], vconf.get("rate", "+0%"))
     elif short_hook:
         audio["hookshort"] = audio["hook"]
+
+    # SHORT SCENE NARRATIONS: in_short scenes carry a compressed 40-60
+    # word version for the Short — full scenes run 30-40s and can never
+    # fit after the trimmed hook (one full scene = a 46s Short)
+    for idx, s_ in enumerate(script["scenes"]):
+        sn = (s_.get("short_narration") or "").strip()
+        if sn and s_.get("in_short"):
+            audio[f"shortscene{idx}"] = tts_mod.tts(
+                f"{sid}_shortscene{idx}", sn,
+                vconf["long"], vconf.get("rate", "+0%"))
 
     durations = {k: AudioFileClip(str(mp3)).duration for k, (mp3, _) in audio.items()}
 

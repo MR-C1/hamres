@@ -170,6 +170,250 @@ def video_admin():
     return jsonify({"ok": not failed, "done": done, "failed": failed})
 
 
+# ---------------------------------------------------------------------------
+# WEB CONTROL PANEL (same free Render service — owner password = WORKER_SECRET)
+# ---------------------------------------------------------------------------
+
+import hashlib as _hashlib
+
+def _panel_ok():
+    import flask
+    key = request.cookies.get("panel_key", "")
+    want = _hashlib.sha256(config.WORKER_SECRET.encode()).hexdigest()
+    return bool(config.WORKER_SECRET) and key == want
+
+
+PANEL_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FOOTNOTE Control Panel</title>
+<style>
+:root{--ink:#14141e;--card:#1d1d29;--cream:#faf6ee;--red:#b21818;--dim:#8b8b9e;--ok:#3fbf6f;--warn:#e0a030}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--ink);color:var(--cream);font:14px/1.5 system-ui,sans-serif;padding:20px;max-width:1100px;margin:0 auto}
+h1{font-size:22px;letter-spacing:.5px}h1 .star{color:var(--red)}
+.pills{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}
+.pill{background:var(--card);border-radius:20px;padding:6px 14px;font-size:13px}
+.pill b{color:var(--red)}
+.card{background:var(--card);border-radius:12px;padding:16px;margin:14px 0}
+.card h2{font-size:15px;text-transform:uppercase;letter-spacing:1px;color:var(--dim);margin-bottom:10px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+td,th{padding:6px 8px;text-align:left;border-bottom:1px solid #2a2a3a}
+th{color:var(--dim);font-weight:600}
+.st-pending{color:var(--warn)}.st-claimed{color:#5fa8e8}.st-done{color:var(--ok)}.st-failed{color:var(--red)}
+.btn{background:var(--red);color:var(--cream);border:0;border-radius:8px;padding:8px 16px;font-size:13px;cursor:pointer;margin:2px}
+.btn:hover{filter:brightness(1.2)}
+.btn.ghost{background:#2a2a3a}
+.videorow{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #2a2a3a}
+.videorow a{color:var(--cream);text-decoration:none;font-weight:600}
+.videorow a:hover{color:var(--red)}
+.grow{flex:1}
+.log{font-family:ui-monospace,monospace;font-size:12px;color:var(--dim);max-height:260px;overflow-y:auto}
+.log div{padding:2px 0;border-bottom:1px solid #232330}
+.actions{display:flex;flex-wrap:wrap;gap:4px}
+input{background:#2a2a3a;border:1px solid #3a3a4a;color:var(--cream);border-radius:8px;padding:10px;font-size:14px;width:100%}
+.login{max-width:360px;margin:80px auto;text-align:center}
+#refresh{color:var(--dim);font-size:12px;text-align:right}
+</style></head><body>
+<div id="app" class="login">
+  <h1>FOOTNOTE<span class="star">*</span></h1>
+  <p style="color:var(--dim);margin:8px 0 20px">Control Panel — the part they skipped</p>
+  <input type="password" id="key" placeholder="Panel password (WORKER_SECRET)" onkeydown="if(event.key==='Enter')login()">
+  <button class="btn" style="margin-top:10px;width:100%" onclick="login()">Enter</button>
+  <p id="err" style="color:var(--red);margin-top:8px;font-size:12px"></p>
+</div>
+<div id="panel" style="display:none">
+  <h1>FOOTNOTE<span class="star">*</span> <span style="font-size:13px;color:var(--dim)">Control Panel</span></h1>
+  <div class="pills" id="pills"></div>
+  <div class="card"><h2>Actions</h2><div class="actions">
+    <button class="btn" onclick="act('next')">🎬 New video</button>
+    <button class="btn" onclick="act('publish')">🚀 Publish all</button>
+    <button class="btn ghost" onclick="act('retry')">🔁 Retry failed</button>
+    <button class="btn ghost" onclick="act('pause')">⏸ Pause</button>
+    <button class="btn ghost" onclick="act('resume')">▶️ Resume</button>
+    <button class="btn ghost" onclick="act('clear_failed')">🧹 Clear failed</button>
+    <button class="btn ghost" onclick="act('reset')">🔄 Reset approvals</button>
+    <button class="btn ghost" style="background:#4a1a1a" onclick="if(confirm('Wipe the whole queue? Pending approvals are dropped (videos stay private).'))act('clear_all')">⛔ Clear everything</button>
+  </div></div>
+  <div class="card"><h2>Awaiting your decision</h2><div id="pending"></div></div>
+  <div class="card"><h2>Job queue</h2><div id="queue"></div></div>
+  <div class="card"><h2>Recent activity</h2><div class="log" id="log"></div></div>
+  <div id="refresh"></div>
+</div>
+<script>
+async function login(){
+  const r=await fetch('/api/state',{headers:{'X-Panel-Key':document.getElementById('key').value}});
+  if(!r.ok){document.getElementById('err').textContent='Wrong password';return}
+  document.cookie='panel_key='+await sha(document.getElementById('key').value)+';path=/;max-age=2592000;secure';
+  document.getElementById('app').style.display='none';
+  document.getElementById('panel').style.display='block';
+  load();
+}
+async function sha(t){const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(t));
+  return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('')}
+let KEY=null;
+async function load(){
+  const r=await fetch('/api/state');
+  if(r.status===403){location.reload();return}
+  const d=await r.json();KEY=d._key;
+  const P=(t,v)=>'<div class="pill">'+t+' <b>'+v+'</b></div>';
+  document.getElementById('pills').innerHTML=
+    P('📺',d.channel.title+' — '+d.channel.subs+' subs')+P('👁',d.channel.views+' views')+
+    P('🎬',d.channel.videos+' videos')+P('⏳',d.queue.pending+' pending jobs')+
+    P('✅',d.queue.awaiting+' awaiting decision')+
+    P('🤖','auto-approve '+(d.settings.auto_approve?'ON':'off')+' ('+d.settings.approved+'/10)')+
+    P('⚙️','auto work '+(d.settings.paused?'PAUSED':'running'))+
+    P('🖥','worker seen '+d.worker.mins_ago+'m ago')+P('⏱','brain up '+d.uptime);
+  let ph='';
+  if(!d.pending.length)ph='<p style="color:var(--dim)">Nothing awaiting decision.</p>';
+  for(const v of d.pending){
+    ph+='<div class="videorow"><a href="'+v.url+'" target="_blank">'+esc(v.title)+'</a>'+
+      '<span style="color:var(--dim);font-size:12px">'+v.alts+' alt titles</span>'+
+      '<span class="grow"></span>'+
+      '<button class="btn" onclick="act(\'publish:'+v.id+'\')">✅ Publish</button>'+
+      '<button class="btn ghost" style="background:#4a1a1a" onclick="if(confirm(\'Delete this video from YouTube permanently?\'))act(\'reject:'+v.id+'\')">❌ Delete</button></div>';
+  }
+  document.getElementById('pending').innerHTML=ph;
+  let qh='<table><tr><th></th><th>id</th><th>type</th><th>status</th><th>age</th><th>title</th></tr>';
+  if(!d.jobs.length)qh+='<tr><td colspan="6" style="color:var(--dim)">Queue empty</td></tr>';
+  for(const j of d.jobs.slice(-15).reverse()){
+    qh+='<tr><td class="st-'+j.status+'">'+({pending:'⏳',claimed:'🔧',done:'✅',failed:'❌'}[j.status]||'❓')+'</td>'+
+    '<td><code>'+j.id.slice(0,8)+'</code></td><td>'+j.type+'</td><td class="st-'+j.status+'">'+j.status+'</td><td>'+j.age+'m</td><td>'+esc(j.title)+'</td></tr>';
+  }
+  document.getElementById('queue').innerHTML=qh+'</table>';
+  document.getElementById('log').innerHTML=d.log.map(l=>'<div>'+esc(l)+'</div>').join('');
+  document.getElementById('refresh').textContent='auto-refresh 15s · '+new Date().toLocaleTimeString();
+}
+function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+async function act(a){
+  const r=await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:a})});
+  const d=await r.json();
+  if(d.ok!==false)load();else alert(d.error||'failed');
+}
+load();setInterval(load,15000);
+</script></body></html>"""
+
+
+@app.route("/panel")
+def panel():
+    if _panel_ok():
+        return PANEL_HTML
+    return PANEL_HTML  # login screen; JS gates the data behind auth
+
+
+@app.route("/api/state")
+def api_state():
+    if not _panel_ok():
+        return jsonify({"error": "unauthorized"}), 403
+    state.default_state()
+    import time as _t
+    w = state.STATE.get("worker", {})
+    mins = ""
+    if w.get("last_seen"):
+        try:
+            from datetime import datetime as _dt
+            mins = int((_dt.utcnow() - _dt.fromisoformat(w["last_seen"]))
+                       .total_seconds() // 60)
+        except Exception:
+            pass
+    try:
+        ch = yt.channel_stats() or {"title": "?", "subs": 0, "views": 0,
+                                    "videos": 0}
+    except Exception:
+        ch = {"title": "unavailable", "subs": 0, "views": 0, "videos": 0}
+    jobs = state.STATE.get("jobs", [])
+    now = _t.time()
+    s = state.STATE["settings"]
+    return jsonify({
+        "channel": ch,
+        "queue": {"pending": sum(1 for j in jobs if j["status"] == "pending")},
+        "awaiting": len(state.STATE["pending_videos"]),
+        "settings": {"auto_approve": s.get("auto_approve"),
+                     "approved": s.get("approved_count", 0),
+                     "paused": s.get("paused")},
+        "worker": {"mins_ago": mins},
+        "uptime": f"{int(_t.time() - STARTED_AT) // 3600}h "
+                  f"{(int(_t.time() - STARTED_AT) % 3600) // 60}m",
+        "pending": [{"id": uid, "title": p.get("title", "?"),
+                     "url": p.get("video_url", ""),
+                     "alts": len(p.get("title_alternatives") or [])}
+                    for uid, p in state.STATE["pending_videos"].items()],
+        "jobs": [{"id": j["id"], "type": j["type"], "status": j["status"],
+                  "age": int((now - j.get("created", now)) / 60),
+                  "title": (j.get("script", {}).get("title") or
+                            j.get("result", {}).get("msg", ""))[:60]}
+                 for j in jobs],
+        "log": comms.LOG[-20:],
+    })
+
+
+@app.route("/api/action", methods=["POST"])
+def api_action():
+    if not _panel_ok():
+        return jsonify({"error": "unauthorized"}), 403
+    state.default_state()
+    data = request.get_json(force=True, silent=True) or {}
+    a = data.get("action", "")
+    import cloud
+    if a == "next":
+        comms.send("Writing a script… (from panel)")
+        made = brain.queue_next_video(1)
+        return jsonify({"ok": bool(made)})
+    if a == "publish":
+        _publish_pending()
+        return jsonify({"ok": True})
+    if a.startswith("publish:"):
+        uid = a.split(":", 1)[1]
+        p = state.STATE["pending_videos"].get(uid)
+        if p:
+            s_ = state.STATE["settings"]
+            s_["approved_count"] = s_.get("approved_count", 0) + 1
+            _publish_now(uid)
+            return jsonify({"ok": True})
+        return jsonify({"ok": False, "error": "not pending"})
+    if a.startswith("reject:"):
+        _delete_pending(a.split(":", 1)[1])
+        return jsonify({"ok": True})
+    if a == "retry":
+        state.reload_jobs()
+        n = 0
+        for j in state.STATE["jobs"]:
+            if j.get("status") == "failed":
+                j["status"] = "pending"
+                j["updated"] = time.time()
+                n += 1
+        state.save_now()
+        if n:
+            cloud.wake_soon("render")
+        return jsonify({"ok": True, "requeued": n})
+    if a == "pause":
+        state.STATE["settings"]["paused"] = True
+        state.save_now()
+        return jsonify({"ok": True})
+    if a == "resume":
+        state.STATE["settings"]["paused"] = False
+        state.save_now()
+        return jsonify({"ok": True})
+    if a == "clear_failed":
+        state.reload_jobs()
+        state.STATE["jobs"] = [j for j in state.STATE["jobs"]
+                               if j.get("status") != "failed"]
+        state.save_now()
+        return jsonify({"ok": True})
+    if a == "clear_all":
+        state.reload_jobs()
+        state.STATE["jobs"] = []
+        state.STATE["pending_videos"] = {}
+        state.save_now()
+        return jsonify({"ok": True})
+    if a == "reset":
+        s_ = state.STATE["settings"]
+        s_["approved_count"] = 0
+        s_["auto_approve"] = False
+        state.save_now()
+        return jsonify({"ok": True})
+    return jsonify({"ok": False, "error": f"unknown action {a!r}"}), 400
+
+
 @app.route("/queue-render", methods=["POST"])
 def queue_render():
     """Queue a hand-authored script for cloud rendering (owner tooling:

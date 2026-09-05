@@ -177,7 +177,7 @@ def queue_render():
     script = data.get("script") or {}
     if not all(script.get(k) for k in ("id", "title", "hook", "scenes")):
         return jsonify({"error": "script needs id/title/hook/scenes"}), 400
-    import uuid
+    import cloud
     payload = {"script": script}
     if data.get("approval_id"):
         payload["approval_id"] = data["approval_id"]

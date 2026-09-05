@@ -34,58 +34,85 @@ def get_service():
     return _service
 
 
+def _with_retries(fn, attempts=3, base_delay=4):
+    """Transient-transport retry. Render's Python 3.14 + httplib2 pooled
+    connections occasionally go stale (SSL DECRYPTION_FAILED_OR_BAD_
+    RECORD_MAC) — the very next request on a fresh connection succeeds,
+    so retry instead of letting the daily report die."""
+    import time as _t
+    last = None
+    for i in range(attempts):
+        try:
+            return fn()
+        except Exception as e:
+            last = e
+            msg = str(e)
+            transient = ("SSL" in msg or "DECRYPTION" in msg
+                         or "timed out" in msg.lower()
+                         or isinstance(e, ConnectionError))
+            if not transient or i == attempts - 1:
+                raise
+            _t.sleep(base_delay * (i + 1))
+    raise last
+
+
+
 def channel_stats():
     """Channel-level numbers: subscribers, views, video count."""
-    yt = get_service()
-    r = yt.channels().list(
-        part="snippet,statistics,contentDetails", mine=True).execute()
-    items = r.get("items", [])
-    if not items:
-        return None
-    c = items[0]
-    st = c.get("statistics", {})
-    return {
-        "title": c["snippet"]["title"],
-        "subs": int(st.get("subscriberCount", 0)),
-        "views": int(st.get("viewCount", 0)),
-        "videos": int(st.get("videoCount", 0)),
-        # uploads playlist — some channels hide it, so .get() not []
-        "uploads_playlist": (c.get("contentDetails", {})
-                             .get("relatedPlaylists", {})
-                             .get("uploads", "")),
-    }
+    def once():
+        yt = get_service()
+        r = yt.channels().list(
+            part="snippet,statistics,contentDetails", mine=True).execute()
+        items = r.get("items", [])
+        if not items:
+            return None
+        c = items[0]
+        st = c.get("statistics", {})
+        return {
+            "title": c["snippet"]["title"],
+            "subs": int(st.get("subscriberCount", 0)),
+            "views": int(st.get("viewCount", 0)),
+            "videos": int(st.get("videoCount", 0)),
+            # uploads playlist — some channels hide it, so .get() not []
+            "uploads_playlist": (c.get("contentDetails", {})
+                                 .get("relatedPlaylists", {})
+                                 .get("uploads", "")),
+        }
+    return _with_retries(once)
 
 
 def my_videos(max_results=30):
     """Own videos with statistics, newest first. Uses the uploads playlist
     (cheap) instead of search.list (100 quota units)."""
-    yt = get_service()
-    ch = channel_stats()
-    if not ch:
-        return []
-    r = yt.playlistItems().list(
-        part="snippet,contentDetails",
-        playlistId=ch["uploads_playlist"], maxResults=max_results,
-    ).execute()
-    ids = [i["contentDetails"]["videoId"] for i in r.get("items", [])]
-    if not ids:
-        return []
-    v = yt.videos().list(part="snippet,statistics,status",
-                         id=",".join(ids)).execute()
-    out = []
-    for item in v.get("items", []):
-        st = item.get("statistics", {})
-        out.append({
-            "id": item["id"],
-            "title": item["snippet"]["title"],
-            "published": item["snippet"]["publishedAt"][:10],
-            "views": int(st.get("viewCount", 0)),
-            "likes": int(st.get("likeCount", 0)),
-            "comments": int(st.get("commentCount", 0)),
-            "privacy": item.get("status", {}).get("privacyStatus", ""),
-            "publish_at": item.get("status", {}).get("publishAt", ""),
-        })
-    return out
+    def once():
+        yt = get_service()
+        ch = channel_stats()
+        if not ch or not ch.get("uploads_playlist"):
+            return []
+        r = yt.playlistItems().list(
+            part="snippet,contentDetails",
+            playlistId=ch["uploads_playlist"], maxResults=max_results,
+        ).execute()
+        ids = [i["contentDetails"]["videoId"] for i in r.get("items", [])]
+        if not ids:
+            return []
+        v = yt.videos().list(part="snippet,statistics,status",
+                             id=",".join(ids)).execute()
+        out = []
+        for item in v.get("items", []):
+            st = item.get("statistics", {})
+            out.append({
+                "id": item["id"],
+                "title": item["snippet"]["title"],
+                "published": item["snippet"]["publishedAt"][:10],
+                "views": int(st.get("viewCount", 0)),
+                "likes": int(st.get("likeCount", 0)),
+                "comments": int(st.get("commentCount", 0)),
+                "privacy": item.get("status", {}).get("privacyStatus", ""),
+                "publish_at": item.get("status", {}).get("publishAt", ""),
+            })
+        return out
+    return _with_retries(once)
 
 
 def update_title(video_id, new_title, category_id="27"):

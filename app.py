@@ -177,15 +177,12 @@ def video_admin():
 import hashlib as _hashlib
 
 def _panel_ok():
-    """Auth: session cookie OR the raw secret as a header (the login
-    screen sends the header first; the cookie serves later visits)."""
-    key = request.cookies.get("panel_key", "") or         request.headers.get("X-Panel-Key", "")
-    if not config.WORKER_SECRET:
-        return False
-    # the header carries the raw secret; the cookie carries its hash
-    if key == config.WORKER_SECRET:
-        return True
-    return key == _hashlib.sha256(config.WORKER_SECRET.encode()).hexdigest()
+    """Open panel (owner choice: no password). OBSERVE: this makes the
+    /api/state and /api/action routes publicly reachable by anyone who
+    knows the URL — publish/delete are exposed. The URL is unguessable
+    enough for the owner's risk tolerance; revert this function to the
+    cookie check if that changes."""
+    return True
 
 
 PANEL_HTML = """<!doctype html>
@@ -219,14 +216,7 @@ input{background:#2a2a3a;border:1px solid #3a3a4a;color:var(--cream);border-radi
 .login{max-width:360px;margin:80px auto;text-align:center}
 #refresh{color:var(--dim);font-size:12px;text-align:right}
 </style></head><body>
-<div id="app" class="login">
-  <h1>FOOTNOTE<span class="star">*</span></h1>
-  <p style="color:var(--dim);margin:8px 0 20px">Control Panel — the part they skipped</p>
-  <input type="password" id="key" placeholder="Panel password (WORKER_SECRET)" onkeydown="if(event.key==='Enter')login()">
-  <button class="btn" style="margin-top:10px;width:100%" onclick="login()">Enter</button>
-  <p id="err" style="color:var(--red);margin-top:8px;font-size:12px"></p>
-</div>
-<div id="panel" style="display:none">
+<div id="panel">
   <h1>FOOTNOTE<span class="star">*</span> <span style="font-size:13px;color:var(--dim)">Control Panel</span></h1>
   <div class="pills" id="pills"></div>
   <div class="card"><h2>Actions</h2><div class="actions">
@@ -245,17 +235,6 @@ input{background:#2a2a3a;border:1px solid #3a3a4a;color:var(--cream);border-radi
   <div id="refresh"></div>
 </div>
 <script>
-async function login(){
-  const r=await fetch('/api/state',{headers:{'X-Panel-Key':document.getElementById('key').value}});
-  if(!r.ok){document.getElementById('err').textContent='Wrong password';return}
-  document.cookie='panel_key='+await sha(document.getElementById('key').value)+';path=/;max-age=2592000;secure';
-  document.getElementById('app').style.display='none';
-  document.getElementById('panel').style.display='block';
-  load();
-}
-async function sha(t){const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(t));
-  return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('')}
-let KEY=null;
 async function load(){
   const r=await fetch('/api/state');
   if(r.status===403){location.reload();return}

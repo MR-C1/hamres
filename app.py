@@ -35,6 +35,10 @@ HELP_HTML = """🎬 <b>Channel Agent</b> — your 24/7 YouTube growth manager
 /next — queue a new video right now
 /clear — empty the job queue (/clear all also drops pending approvals)
 /publish — publish every pending rendered video
+/queue — every job in the queue with status and age
+/pending — videos awaiting your ✅/❌, with watch links
+/log — the brain's recent activity
+/retry — requeue the last failed job (/retry all for every)
 /reset — reset the approval counter to 0/10, auto-approve off
 /report — today's growth report
 /idea &lt;topic&gt; — draft a script on a topic
@@ -458,6 +462,75 @@ def cmd_diag(_):
                html=True)
 
 
+def cmd_queue(_):
+    """Detailed queue view: every job with status, age, and type."""
+    state.default_state()
+    state.reload_jobs()
+    jobs = state.STATE["jobs"]
+    if not jobs:
+        comms.send("📭 Queue is empty. /next queues a fresh video.", html=True)
+        return
+    now = time.time()
+    lines = [f"📋 <b>Queue — {len(jobs)} jobs</b>"]
+    for j in jobs[-15:]:
+        age = int((now - j.get("created", now)) / 60)
+        title = (j.get("script", {}).get("title")
+                 or j.get("result", {}).get("msg", "") or j["type"])[:45]
+        icon = {"pending": "⏳", "claimed": "🔧", "done": "✅",
+                "failed": "❌"}.get(j["status"], "❓")
+        lines.append(f"{icon} <code>{j['id'][:8]}</code> {j['type']:7} "
+                     f"{j['status']:7} {age}m — {comms.esc(title)}")
+    comms.send("\n".join(lines), html=True)
+
+
+def cmd_pending(_):
+    """Everything awaiting your decision, with watch links."""
+    state.default_state()
+    pending = state.STATE["pending_videos"]
+    if not pending:
+        comms.send("✅ Nothing awaiting your decision. New previews "
+                   "arrive here automatically after each render.",
+                   html=True)
+        return
+    lines = [f"🎬 <b>Awaiting your decision — {len(pending)} video(s)</b>",
+             "Tap ✅/❌ on the preview message, or say 'publish' for all:"]
+    for uid, p in pending.items():
+        alts = p.get("title_alternatives") or []
+        alt_note = f" (+{len(alts)} alt titles)" if alts else ""
+        url = comms.esc(p.get("video_url", ""))
+        lines.append(f"• <a href=\"{url}\">"
+                     f"{comms.esc(p.get('title', '?')[:50])}</a>{alt_note}")
+    comms.send("\n".join(lines), html=True)
+
+
+def cmd_log(_):
+    """The brain's recent activity log (last 15 events)."""
+    state.default_state()
+    entries = comms.LOG[-15:]
+    body = ("\n".join(comms.esc(e) for e in entries)
+            if entries else "(quiet — nothing logged yet)")
+    comms.send("📜 <b>Recent activity</b>\n" + body, html=True)
+
+
+def cmd_retry(args):
+    """Requeue the last failed job: /retry (latest) or /retry all."""
+    state.default_state()
+    state.reload_jobs()
+    failed = [j for j in state.STATE["jobs"] if j.get("status") == "failed"]
+    if not failed:
+        comms.send("No failed jobs to retry.", html=True)
+        return
+    targets = failed if args.strip().lower() == "all" else failed[-1:]
+    import cloud
+    for j in targets:
+        j["status"] = "pending"
+        j["updated"] = time.time()
+    state.save_now()
+    cloud.wake_soon("render")
+    comms.send(f"🔁 Requeued {len(targets)} failed job(s) — cloud worker "
+               f"waking.", html=True)
+
+
 def cmd_publish(_):
     """Publish rendered-but-unapproved videos (same as saying 'publish')."""
     _publish_pending()
@@ -516,6 +589,10 @@ COMMANDS = {
     "settings": cmd_settings,
     "diag": cmd_diag,
     "publish": cmd_publish,
+    "queue": cmd_queue,
+    "pending": cmd_pending,
+    "log": cmd_log,
+    "retry": cmd_retry,
     "clear": cmd_clear,
     "reset": cmd_reset_approvals,
     "reset-approvals": cmd_reset_approvals,

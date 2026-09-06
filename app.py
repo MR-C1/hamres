@@ -186,237 +186,930 @@ def _panel_ok():
 
 
 PANEL_HTML = r"""<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>FOOTNOTE Control Panel</title>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FOOTNOTE Production Desk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-:root{--ink:#14141e;--card:#1d1d29;--card2:#232331;--cream:#faf6ee;--red:#b21818;--dim:#8b8b9e;--ok:#3fbf6f;--warn:#e0a030;--blue:#5fa8e8}
+/* ---- tokens ---- */
+:root{
+  --paper:#faf6ee; --card:#fffdf6; --wash:#f3ecdc;
+  --ink:#14141e; --muted:#5c5a4f; --dim:#8a8574; /* dim: decoration only */
+  --rule:#e0d9c6; --rule-soft:#ebe5d4;
+  --red:#b21818; --red-dark:#8f1414; --red-lift:#d95050;
+  --green:#2e7d43; --amber:#96650a; --blue:#2b5fa8;
+  --track:#efc9c9; /* lighter step of the red ramp, meter track */
+  --serif:'Newsreader',Georgia,serif;
+  --sans:'IBM Plex Sans',system-ui,sans-serif;
+  --mono:'IBM Plex Mono',ui-monospace,monospace;
+  --rad:2px;
+}
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--ink);color:var(--cream);font:14px/1.5 system-ui,sans-serif;padding:16px;max-width:1280px;margin:0 auto}
-header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:6px}
-h1{font-size:22px;letter-spacing:.5px}h1 .star{color:var(--red)}
-.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px}
-.dot.ok{background:var(--ok);box-shadow:0 0 8px var(--ok)}.dot.warn{background:var(--warn)}.dot.bad{background:var(--red)}
-#live{font-size:12px;color:var(--dim);margin-left:auto}
-nav{display:flex;gap:6px;margin:10px 0;flex-wrap:wrap}
-nav button{background:var(--card);border:0;color:var(--dim);border-radius:8px;padding:8px 16px;font-size:13px;cursor:pointer}
-nav button.on{background:var(--red);color:var(--cream)}
-.tab{display:none}.tab.on{display:block}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
-.card{background:var(--card);border-radius:12px;padding:16px;margin:12px 0}
-.card h2{font-size:13px;text-transform:uppercase;letter-spacing:1px;color:var(--dim);margin-bottom:10px}
-.stat{font-size:26px;font-weight:700}.stat small{font-size:13px;color:var(--dim);font-weight:400}
-.delta{font-size:12px}.up{color:var(--ok)}.down{color:var(--red)}
-table{width:100%;border-collapse:collapse;font-size:13px}
-td,th{padding:7px 8px;text-align:left;border-bottom:1px solid #2a2a3a}
-th{color:var(--dim);font-weight:600;cursor:pointer;user-select:none}
-th:hover{color:var(--cream)}
-.st-pending{color:var(--warn)}.st-claimed{color:var(--blue)}.st-done{color:var(--ok)}.st-failed{color:var(--red)}
-.badge{font-size:11px;padding:2px 8px;border-radius:10px;background:#2a2a3a;color:var(--dim)}
-.badge.pub{background:#1d3a2a;color:var(--ok)}.badge.priv{background:#3a2a1d;color:var(--warn)}
-.btn{background:var(--red);color:var(--cream);border:0;border-radius:8px;padding:7px 14px;font-size:13px;cursor:pointer;margin:2px}
-.btn:hover{filter:brightness(1.25)}
-.btn.ghost{background:var(--card2)}.btn.sm{padding:4px 10px;font-size:12px}
-.actions{display:flex;flex-wrap:wrap;gap:4px}
-.videorow{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #2a2a3a;flex-wrap:wrap}
-.videorow a{color:var(--cream);text-decoration:none;font-weight:600}
-.videorow a:hover{color:var(--red)}
-.grow{flex:1}
-.log{font-family:ui-monospace,monospace;font-size:12px;color:var(--dim);max-height:300px;overflow-y:auto;background:var(--card2);border-radius:8px;padding:10px}
-.log div{padding:2px 0;border-bottom:1px solid #232330;white-space:pre-wrap}
-.log .t{color:var(--blue)}
-canvas{width:100%;height:120px;display:block}
-.bar{height:8px;border-radius:4px;background:var(--card2);overflow:hidden;margin-top:6px}
-.bar i{display:block;height:100%;background:var(--red)}
-textarea,input[type=text]{background:var(--card2);border:1px solid #3a3a4a;color:var(--cream);border-radius:8px;padding:10px;font-size:14px;width:100%;font-family:inherit}
-textarea{min-height:70px;resize:vertical}
-#toast{position:fixed;bottom:20px;right:20px;background:var(--red);color:var(--cream);padding:12px 20px;border-radius:10px;opacity:0;transition:opacity .3s;z-index:9;font-size:13px}
-.toast-ok{background:#1d3a2a !important;color:var(--ok) !important}
-.muted{color:var(--dim);font-size:12px}
-.score{font-weight:700}.score.hi{color:var(--ok)}.score.mid{color:var(--warn)}.score.lo{color:var(--red)}
-.toggle{cursor:pointer;user-select:none}
-kbd{background:var(--card2);border-radius:4px;padding:1px 6px;font-size:11px}
-details{margin:8px 0}summary{cursor:pointer;color:var(--dim);font-size:13px}
-</style></head><body>
-<header><h1>FOOTNOTE<span class="star">*</span> <span class="muted">Control Center</span></h1>
-<span id="health"></span><span id="live"></span></header>
-<nav>
-<button class="on" data-t="dash" onclick="tab('dash')">📊 Dashboard</button>
-<button data-t="videos" onclick="tab('videos')">📺 Videos</button>
-<button data-t="pending" onclick="tab('pending')">🎬 Decisions</button>
-<button data-t="tools" onclick="tab('tools')">🛠 Tools</button>
-<button data-t="logs" onclick="tab('logs')">📜 Logs</button>
+html{-webkit-text-size-adjust:100%}
+body{background:var(--paper);color:var(--ink);font:15px/1.55 var(--sans);padding:0 20px 90px}
+.wrap{max-width:1180px;margin:0 auto}
+
+/* ---- focus ---- */
+:focus-visible{outline:2px solid var(--red);outline-offset:2px;border-radius:var(--rad)}
+::selection{background:var(--red);color:var(--paper)}
+
+/* ---- masthead ---- */
+.mast{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:26px 0 14px;border-bottom:2px solid var(--ink)}
+.mast-brand{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.mast-star{width:30px;height:30px;align-self:center;flex:none}
+.mast-star .spokes{stroke:var(--red);stroke-width:2.4;stroke-linecap:round}
+.mast-star.live .spokes{animation:spin 40s linear infinite;transform-origin:12px 12px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.mast h1{font:600 34px/1 var(--serif);letter-spacing:.01em}
+/* the tagline breaks as a whole line, never mid-phrase */
+.mast .tag{font:italic 400 16px/1 var(--serif);color:var(--muted);white-space:nowrap}
+.mast-meta{display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:13.5px;color:var(--muted)}
+.beat{display:inline-flex;align-items:center;gap:7px;min-height:24px}
+.beat .led{width:8px;height:8px;border-radius:50%;flex:none;background:var(--dim)}
+.led.ok{background:var(--green)} .led.warn{background:var(--amber)} .led.bad{background:var(--red-lift)}
+#refresh{background:none;border:0;padding:6px 8px;min-height:32px;color:var(--muted);font:inherit;cursor:pointer;border-radius:var(--rad)}
+#refresh:hover{color:var(--ink)}
+/* muted is right for a panel that is keeping itself current; a panel that has stopped
+   is showing a photograph, and that is worth the ink */
+#refresh.off{color:var(--ink)}
+.pausedflag{background:var(--red);color:#fff;border-radius:999px;padding:3px 9px;font-size:12.5px;letter-spacing:.02em}
+.loadfail{border:1px solid var(--red);border-left-width:4px;background:#fdf1f1;color:var(--ink);padding:12px 14px;border-radius:var(--rad);margin:14px 0;font-size:14.5px}
+
+/* ---- nav ---- */
+nav{display:flex;gap:2px;border-bottom:1px solid var(--rule);overflow-x:auto;scrollbar-width:none}
+nav::-webkit-scrollbar{display:none}
+nav button{background:none;border:0;border-bottom:2px solid transparent;margin-bottom:-1px;padding:13px 16px 11px;font:500 15px var(--sans);color:var(--muted);cursor:pointer;white-space:nowrap;min-height:44px}
+nav button:hover{color:var(--ink)}
+nav button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--red)}
+nav .count{display:inline-block;min-width:20px;margin-left:7px;padding:1px 6px;border-radius:9px;background:var(--red);color:var(--paper);font:600 11.5px/1.4 var(--sans);text-align:center}
+nav .count.zero{display:none}
+/* phones: wrap the strip onto two rows rather than hide a tab behind a swipe */
+@media (max-width:560px){
+  nav{flex-wrap:wrap;overflow-x:visible}
+  nav button{padding:12px 12px 10px;font-size:14.5px}
+}
+
+/* ---- sections & headers ---- */
+section.tab{display:none;padding-top:26px}
+section.tab.on{display:block}
+.sec{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:30px 0 12px}
+.sec:first-child{margin-top:4px}
+.sec h2{font:600 24px/1.2 var(--serif)}
+.sec .note{font-size:13px;color:var(--muted)}
+
+/* ---- stat tiles ---- */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:10px}
+.tile{background:var(--card);border:1px solid var(--rule);border-radius:var(--rad);padding:14px 16px 12px;min-height:104px;display:flex;flex-direction:column;gap:2px}
+.tile .label{font-size:13.5px;color:var(--muted)}
+.tile .value{font:600 27px/1.15 var(--sans);letter-spacing:-.01em;font-variant-numeric:proportional-nums}
+.tile .sub{font-size:13px;color:var(--muted)}
+.tile .spark{margin:4px 0 2px}
+.delta{font-size:13px;font-weight:600}
+.delta.up{color:var(--green)} .delta.down{color:var(--red)}
+.delta.flat{color:var(--muted)}
+/* the tile's footer line sits on the floor, so every tile in the row aligns */
+.tile > .sub:last-child, .tile > .delta:last-child{margin-top:auto}
+
+/* ---- charts ---- */
+.charts{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media (max-width:760px){.charts{grid-template-columns:1fr}}
+/* two-up row where each card keeps its natural height — a stretched card leaves a void */
+.duo{display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:start;margin-top:10px}
+@media (max-width:760px){.duo{grid-template-columns:1fr}}
+.duo > .card{margin:0}
+.chart{background:var(--card);border:1px solid var(--rule);border-radius:var(--rad);padding:16px 18px 12px}
+.chart h3{font:600 17px/1.2 var(--serif);margin-bottom:2px}
+.chart .note{font-size:12.5px;color:var(--muted);margin-bottom:8px}
+.plot{position:relative;touch-action:none}
+.plot svg{display:block;width:100%;height:190px;cursor:crosshair}
+.plot .grid{stroke:var(--rule-soft);stroke-width:1}
+.plot .axis{fill:var(--muted);font:12px var(--sans)}
+.plot .line{fill:none;stroke:var(--red);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.plot .area{fill:var(--red);opacity:.07}
+.plot .enddot{fill:var(--red);stroke:var(--card);stroke-width:2}
+.plot .vline{stroke:var(--dim);stroke-width:1;opacity:0}
+.plot .hitrect{fill:none;pointer-events:all}
+.plot .tipline{stroke:var(--red);stroke-width:1;opacity:0}
+.tip{position:absolute;pointer-events:none;background:var(--ink);color:var(--paper);border-radius:var(--rad);padding:7px 11px;font:500 13px var(--sans);display:none;z-index:5;box-shadow:0 3px 14px rgba(20,20,30,.25)}
+.tip .tv{font-weight:700}
+.tip .td{color:#c9c4b4;font-size:12px}
+details.tbl{margin-top:6px;border-top:1px solid var(--rule-soft)}
+details.tbl summary{cursor:pointer;font-size:13px;color:var(--muted);padding:7px 0 5px;min-height:32px;display:flex;align-items:center;gap:7px;list-style:none}
+details.tbl summary::-webkit-details-marker{display:none}
+details.tbl summary::before{content:"";width:0;height:0;border:4px solid transparent;border-left-color:var(--dim);transition:transform .15s}
+details.tbl[open] summary::before{transform:rotate(90deg) translateX(1px)}
+details.tbl summary:hover{color:var(--ink)}
+details.tbl summary:hover::before{border-left-color:var(--ink)}
+details.tbl table{margin:2px 0 8px}
+details.tbl tbody tr:hover{background:var(--wash)}
+
+/* ---- trust meter ---- */
+.meter{display:flex;gap:3px;margin:10px 0 8px}
+.meter i{flex:1;height:14px;background:var(--track);border-radius:1px}
+.meter i.f{background:var(--red)}
+
+/* ---- cards / lists ---- */
+.card{background:var(--card);border:1px solid var(--rule);border-radius:var(--rad);padding:16px 18px;margin:10px 0}
+.list{background:var(--card);border:1px solid var(--rule);border-radius:var(--rad);padding:6px 18px}
+.rowline{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--rule-soft);flex-wrap:wrap}
+.rowline:last-child{border-bottom:0}
+.rowline .grow{flex:1;min-width:180px}
+.ttl{font-weight:600;color:var(--ink)}
+a.ttl{color:var(--ink);text-decoration:none;background:linear-gradient(var(--red),var(--red)) left bottom/0 1px no-repeat;transition:background-size .15s;padding-bottom:1px}
+a.ttl:hover{background-size:100% 1px}
+.scorebar{width:56px;height:9px;border-radius:2px;background:var(--wash);overflow:hidden;flex:none}
+.scorebar i{display:block;height:100%;border-radius:2px 0 0 2px}
+.sc{font:600 13.5px var(--mono)}
+
+/* ---- status vocabulary ---- */
+.st{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;min-height:24px}
+.st .dot{width:7px;height:7px;border-radius:50%;flex:none}
+.st-wait .dot{background:var(--amber)} .st-wait{color:var(--amber)}
+.st-render .dot{background:var(--blue);animation:pulse 2.2s ease-in-out infinite} .st-render{color:var(--blue)}
+@keyframes pulse{50%{opacity:.35}}
+.st-done .dot{background:var(--green)} .st-done{color:var(--green)}
+.st-fail .dot{background:var(--red-lift)} .st-fail{color:var(--red-lift)}
+.st-off .dot{background:var(--dim)} .st-off{color:var(--muted)}
+
+/* ---- tables ---- */
+.tblwrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--rule-soft)}
+thead th{border-bottom:1px solid var(--rule);font:500 13px var(--sans);color:var(--muted)}
+th.sortable{cursor:pointer;user-select:none;white-space:nowrap}
+th.sortable:hover{color:var(--ink)}
+th .arr{font-size:10px;margin-left:3px}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+td.mono{font-family:var(--mono);font-size:13px;color:var(--muted)}
+tbody tr:hover{background:var(--wash)}
+/* an empty state is the only row in its card, so the card edge closes it — a rule
+   underneath just hangs there. border:0 also has to beat the td rule above. */
+.empty{padding:26px 12px;color:var(--muted);font-size:14.5px;border:0}
+/* set by headIf(): column names have nothing to name, and an empty state sizes the
+   columns to itself, which slides the names off the top of them */
+table.nohead thead{display:none}
+th button{background:none;border:0;padding:0;margin:0;font:inherit;color:inherit;cursor:pointer}
+th button:hover{color:var(--ink)}
+.btn[aria-pressed=true]{background:var(--ink);color:var(--paper)}
+.cl{display:none}
+.sortbar{display:none;align-items:center;gap:8px;padding:10px 0 4px;font-size:13px;color:var(--muted)}
+.sortbar select{font:14px var(--sans);color:var(--ink);background:var(--paper);border:1px solid var(--rule);border-radius:var(--rad);padding:7px 9px;min-height:38px}
+
+/* below 900 the seven columns cannot hold their width — the title crushes to six
+   lines and the trailing columns fall off the card. So each row becomes a block
+   and every value carries its own label. Sorting moves to a native select,
+   which a thumb handles better than a header cell anyway. */
+@media (max-width:900px){
+  .rtable thead{display:none}
+  .rtable, .rtable tbody, .rtable tr, .rtable td{display:block;width:auto;min-width:0}
+  .rtable tr{padding:11px 0;border-bottom:1px solid var(--rule)}
+  .rtable tr:last-child{border-bottom:0}
+  .rtable td{border:0;padding:2px 0;display:flex;align-items:baseline;gap:10px;text-align:left}
+  .rtable td.num{text-align:left}
+  /* the title leads its block: no label, its own full-width line */
+  .rtable td.lead{display:block;padding:0 0 5px}
+  .rtable td.empty{padding:24px 0}
+  .rtable .cl{display:block;flex:0 0 88px;font-size:12.5px;color:var(--muted)}
+  /* the row's action is not a labelled value: it sits flush left, set off by a gap */
+  .rtable td.act{padding-top:7px}
+  .rtable td.act .linkbtn{padding-left:0}
+  .sortbar{display:flex}
+}
+/* tablets have width to spare: the same blocks, but the values run along one
+   line instead of stacking, so a film is four lines tall rather than seven */
+@media (min-width:621px) and (max-width:900px){
+  .rtable tr{display:flex;flex-wrap:wrap;align-items:baseline;column-gap:22px;row-gap:3px}
+  .rtable td{padding:0}
+  .rtable td.lead{flex:1 1 100%;padding:0 0 5px}
+  .rtable .cl{flex:0 0 auto}
+  .rtable td.act{margin-left:auto;padding-top:0}
+}
+
+/* ---- buttons ---- */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;background:var(--card);border:1px solid var(--ink);color:var(--ink);border-radius:var(--rad);padding:8px 16px;min-height:38px;font:500 14px var(--sans);cursor:pointer;transition:background .15s,color .15s}
+.btn:hover{background:var(--ink);color:var(--paper)}
+.btn:disabled{opacity:.5;cursor:default}
+.btn-primary{background:var(--red);border-color:var(--red-dark);color:var(--paper)}
+.btn-primary:hover{background:var(--red-dark)}
+.btn-danger{border-color:var(--red);color:var(--red)}
+.btn-danger:hover{background:var(--red);color:var(--paper)}
+/* an armed button that is not destructive still has to look armed — the label carries
+   it, but ink makes the pending click unmistakable. Danger keeps the red, after. */
+.btn.confirm{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.btn-danger.confirm{background:var(--red);color:var(--paper);border-color:var(--red)}
+.btn-sm{padding:5px 12px;min-height:32px;font-size:13px}
+.linkbtn{background:none;border:0;padding:6px 8px;min-height:32px;font:500 13.5px var(--sans);color:var(--muted);cursor:pointer;border-radius:var(--rad);text-decoration:underline;text-underline-offset:3px}
+.linkbtn:hover{color:var(--red)}
+/* a row action never wraps: "Make private" on two lines reads like two links */
+td.act .linkbtn{white-space:nowrap}
+.actions{display:flex;flex-wrap:wrap;gap:8px}
+/* grouped action bank: routine work first, clearing set apart behind a rule */
+.agroup + .agroup{margin-top:14px;padding-top:14px;border-top:1px solid var(--rule-soft)}
+.agroup.danger{border-top-color:var(--rule)}
+.alabel{font-size:12.5px;color:var(--muted);margin-bottom:8px}
+
+/* ---- chips / tags ---- */
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;padding:2px 9px;border-radius:8px;border:1px solid var(--rule);color:var(--muted);background:var(--paper)}
+.chip .dot{width:6px;height:6px;border-radius:50%}
+.chip.pub .dot{background:var(--green)} .chip.pub{color:var(--green);border-color:#cfe3d3}
+.chip.priv .dot{background:var(--amber)} .chip.priv{color:var(--amber);border-color:#e8d8ae}
+.tags{display:flex;flex-wrap:wrap;gap:6px}
+.tags .chip{font-size:12.5px}
+
+/* ---- forms ---- */
+textarea{width:100%;min-height:74px;resize:vertical;background:var(--card);border:1px solid var(--rule);border-radius:var(--rad);padding:11px 13px;font:15px var(--sans);color:var(--ink)}
+textarea:focus{border-color:var(--ink);outline:none}
+textarea:focus-visible{outline:2px solid var(--red);outline-offset:0}
+.help{font-size:13px;color:var(--muted);margin-top:8px}
+
+/* ---- guidance / log ---- */
+.prose{background:var(--card);border:1px solid var(--rule);border-radius:var(--rad);padding:16px 18px;font-size:14px;color:var(--ink);white-space:pre-wrap;line-height:1.6;max-height:220px;overflow-y:auto}
+.log{font:13px/1.7 var(--mono);background:var(--ink);color:#d8d3c3;border-radius:var(--rad);padding:14px 16px;max-height:340px;overflow-y:auto}
+.log .lt{color:#8a8574}
+.log div{border-bottom:1px solid #232331;padding:2px 0}
+.log div:last-child{border-bottom:0}
+
+/* ---- toast ---- */
+#toast{position:fixed;bottom:22px;right:22px;z-index:50;background:var(--ink);color:var(--paper);padding:13px 18px;border-radius:var(--rad);font:500 14px var(--sans);box-shadow:0 4px 18px rgba(20,20,30,.35);opacity:0;transform:translateY(8px);transition:opacity .25s,transform .25s;max-width:320px}
+#toast.show{opacity:1;transform:none}
+/* a 4px accent was the only thing separating "Published" from "Network error" —
+   the failure now carries the red itself, and the wording still says so too */
+#toast.err{background:var(--red);border-left:4px solid #7d0f0f}
+
+/* ---- flash on data change ---- */
+@keyframes flash{0%{background:var(--wash)}100%{background:var(--card)}}
+.flash{animation:flash 1s ease-out}
+@media (prefers-reduced-motion:reduce){
+  .mast-star.live .spokes,.st-render .dot{animation:none}
+  .flash{animation:none}
+  *{transition:none!important}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="mast">
+  <div class="mast-brand">
+    <svg class="mast-star" id="star" viewBox="0 0 24 24" aria-hidden="true">
+      <g class="spokes"><path d="M12 2v20M3.3 7l17.4 10M20.7 7L3.3 17"/></g>
+    </svg>
+    <h1>FOOTNOTE</h1>
+    <span class="tag">production desk</span>
+  </div>
+  <div class="mast-meta">
+    <span class="beat" id="beat"><span class="led" id="beatled"></span><span id="beattxt">connecting</span></span>
+    <span id="uptime"></span>
+    <span id="clock"></span>
+    <!-- a paused agent makes nothing at all; that cannot live only in a tile subtitle
+         about auto-approve and a button label at the foot of the page -->
+    <span class="pausedflag" id="pausedflag" hidden>agent paused</span>
+    <button id="refresh"></button>
+  </div>
+</header>
+
+<nav role="tablist" aria-label="Panel sections">
+  <button role="tab" aria-selected="true" data-t="desk" id="tab-desk">Desk</button>
+  <button role="tab" aria-selected="false" data-t="films" id="tab-films">Films</button>
+  <button role="tab" aria-selected="false" data-t="dec" id="tab-dec">Decisions<span class="count zero" id="navdec"></span></button>
+  <button role="tab" aria-selected="false" data-t="studio" id="tab-studio">Studio</button>
+  <button role="tab" aria-selected="false" data-t="ledger" id="tab-ledger">Ledger</button>
 </nav>
 
-<div class="tab on" id="t-dash">
- <div class="grid" id="statcards"></div>
- <div class="grid">
-  <div class="card"><h2>Subscribers</h2><canvas id="c-subs"></canvas><p class="muted" id="subs-note"></p></div>
-  <div class="card"><h2>Views</h2><canvas id="c-views"></canvas><p class="muted" id="views-note"></p></div>
- </div>
- <div class="grid">
-  <div class="card"><h2>Hook virality scores</h2><div id="hooks" class="log" style="max-height:160px"></div></div>
-  <div class="card"><h2>Auto-approve trust</h2><div id="trust"></div>
-   <button class="btn ghost sm" style="margin-top:10px" onclick="act('toggle_auto')">Toggle auto-approve</button>
-   <button class="btn ghost sm" onclick="act('reset')">Reset counter</button></div>
- </div>
- <div class="card"><h2>Job queue</h2><div id="queue"></div></div>
-</div>
+<!-- load() keeps the last render through a network drop, but the first load has no
+     last render to keep, and a free-tier dyno waking up fails exactly there: without
+     this the panel would just sit empty with nothing to explain it -->
+<div class="loadfail" id="loadfail" hidden role="status">Couldn't reach the agent — it may be waking up. Retrying every 15 seconds.</div>
 
-<div class="tab" id="t-videos">
- <div class="card"><h2>Channel videos <span class="muted">(click headers to sort)</span></h2>
- <div style="overflow-x:auto"><table id="vidtable"><thead><tr>
-  <th onclick="sortV('title')">Title</th><th onclick="sortV('privacy')">Status</th>
-  <th onclick="sortV('views')">Views</th><th onclick="sortV('likes')">Likes</th>
-  <th onclick="sortV('comments')">Comments</th><th onclick="sortV('published')">Published</th><th></th>
- </tr></thead><tbody id="vidbody"></tbody></table></div></div>
-</div>
+<!-- ============ DESK ============ -->
+<section class="tab on" id="t-desk" role="tabpanel" aria-labelledby="tab-desk">
+  <div class="kpis" id="kpis"></div>
 
-<div class="tab" id="t-pending">
- <div class="card"><h2>Awaiting your decision</h2><div id="pending"></div></div>
-</div>
+  <div class="sec"><h2>Growth</h2><span class="note" id="chartnote"></span></div>
+  <div class="charts">
+    <div class="chart">
+      <h3>Subscribers</h3>
+      <div class="plot" id="plot-subs"></div>
+      <!-- lineChart() decides this: hidden until there are two points to tabulate,
+           which also keeps it shut before the first load arrives -->
+      <details class="tbl" hidden><summary>Show the numbers</summary>
+        <div class="tblwrap"><table id="tbl-subs"><thead><tr><th>Date</th><th class="num">Subscribers</th></tr></thead><tbody></tbody></table></div>
+      </details>
+    </div>
+    <div class="chart">
+      <h3>Views</h3>
+      <div class="plot" id="plot-views"></div>
+      <details class="tbl" hidden><summary>Show the numbers</summary>
+        <div class="tblwrap"><table id="tbl-views"><thead><tr><th>Date</th><th class="num">Views</th></tr></thead><tbody></tbody></table></div>
+      </details>
+    </div>
+  </div>
 
-<div class="tab" id="t-tools">
- <div class="grid">
-  <div class="card"><h2>Quick actions</h2><div class="actions">
-   <button class="btn" onclick="act('next')">🎬 New video</button>
-   <button class="btn" onclick="act('publish')">🚀 Publish all pending</button>
-   <button class="btn ghost" onclick="act('retry')">🔁 Retry failed jobs</button>
-   <button class="btn ghost" onclick="act('pause')">⏸ Pause auto work</button>
-   <button class="btn ghost" onclick="act('resume')">▶️ Resume</button>
-   <button class="btn ghost" onclick="act('clear_failed')">🧹 Clear failed</button>
-   <button class="btn ghost" onclick="act('refresh_channel')">🔄 Refresh channel data</button>
-   <button class="btn ghost" style="background:#4a1a1a" onclick="if(confirm('Wipe the queue and drop pending approvals? Videos stay private.'))act('clear_all')">⛔ Clear everything</button>
-  </div></div>
-  <div class="card"><h2>Custom video</h2>
-   <textarea id="idea" placeholder="Topic or angle… e.g. 'the 1989 memo that created Area 51'"></textarea>
-   <button class="btn" style="margin-top:8px" onclick="idea()">✍️ Write & queue script</button>
-   <p class="muted" style="margin-top:6px">Grounded research → virality gate → cloud render. Preview lands in Telegram + the Decisions tab.</p></div>
- </div>
- <div class="card"><h2>Topic guidance (from growth analysis)</h2><div id="direction" class="log" style="max-height:180px"></div></div>
- <div class="card"><h2>Used topics</h2><div id="topics" class="muted"></div></div>
-</div>
+  <div class="duo">
+    <div class="card">
+      <h3 style="font:600 17px/1.2 var(--serif)">Hook virality</h3>
+      <div class="note" style="font-size:12.5px;color:var(--muted);margin-bottom:6px">Scores from the script gate, recent first.</div>
+      <div id="hooks"></div>
+    </div>
+    <div class="card">
+      <h3 style="font:600 17px/1.2 var(--serif)">Auto-approve trust</h3>
+      <div class="note" style="font-size:12.5px;color:var(--muted);margin-bottom:2px" id="trustnote"></div>
+      <div class="meter" id="meter" role="img" aria-label=""></div>
+      <div class="actions">
+        <button class="btn btn-sm" onclick="act('toggle_auto')" id="btn-auto">Toggle auto-approve</button>
+        <button class="btn btn-sm" onclick="act('reset')">Reset counter</button>
+      </div>
+    </div>
+  </div>
 
-<div class="tab" id="t-logs">
- <div class="card"><h2>Brain activity</h2><div id="log" class="log"></div></div>
+  <div class="sec"><h2>Render queue</h2><span class="note" id="queuenote"></span></div>
+  <div class="card" style="padding:4px 18px">
+    <div class="tblwrap"><table class="rtable" aria-label="Render queue">
+      <thead><tr><th>Script</th><th>Status</th><th class="num">Age</th><th>Job</th></tr></thead>
+      <tbody id="jobs"></tbody>
+    </table></div>
+  </div>
+</section>
+
+<!-- ============ FILMS ============ -->
+<section class="tab" id="t-films" role="tabpanel" aria-labelledby="tab-films">
+  <div class="sec"><h2>Films</h2><span class="note">Every upload, public and private.</span></div>
+  <div class="sortbar">
+    <label for="sortk">Sort by</label>
+    <select id="sortk">
+      <option value="views">Views</option>
+      <option value="likes">Likes</option>
+      <option value="comments">Comments</option>
+      <option value="published">Published</option>
+      <option value="title">Title</option>
+      <option value="privacy">Status</option>
+    </select>
+    <button class="btn btn-sm" id="sortdir" aria-pressed="false">Reverse order</button>
+  </div>
+  <div class="card" style="padding:4px 18px">
+    <div class="tblwrap"><table class="rtable" aria-label="Channel videos">
+      <thead><tr>
+        <th class="sortable" data-k="title" scope="col"><button type="button">Title</button></th>
+        <th class="sortable" data-k="privacy" scope="col"><button type="button">Status</button></th>
+        <th class="sortable num" data-k="views" scope="col"><button type="button">Views</button></th>
+        <th class="sortable num" data-k="likes" scope="col"><button type="button">Likes</button></th>
+        <th class="sortable num" data-k="comments" scope="col"><button type="button">Comments</button></th>
+        <th class="sortable" data-k="published" scope="col"><button type="button">Published</button></th>
+        <th scope="col"><span class="visually-hidden">Actions</span></th>
+      </tr></thead>
+      <tbody id="vids"></tbody>
+    </table></div>
+  </div>
+</section>
+
+<!-- ============ DECISIONS ============ -->
+<section class="tab" id="t-dec" role="tabpanel" aria-labelledby="tab-dec">
+  <div class="sec"><h2>Decisions</h2><span class="note">Finished renders, private on YouTube until you call them.</span></div>
+  <div id="decisions"></div>
+</section>
+
+<!-- ============ STUDIO ============ -->
+<section class="tab" id="t-studio" role="tabpanel" aria-labelledby="tab-studio">
+  <div class="sec"><h2>Commission</h2><span class="note">Grounded research, virality gate, cloud render. The preview lands here and in Telegram.</span></div>
+  <div class="card">
+    <label for="idea" style="display:block;font-size:13.5px;color:var(--muted);margin-bottom:8px">Topic or angle</label>
+    <textarea id="idea" maxlength="300" placeholder="For example: the 1989 memo that created Area 51"></textarea>
+    <div class="actions" style="margin-top:12px">
+      <button class="btn btn-primary" onclick="idea()">Write the script</button>
+    </div>
+  </div>
+
+  <div class="sec"><h2>Actions</h2><span class="note">Destructive and bulk ones ask twice.</span></div>
+  <div class="card">
+    <div class="agroup">
+      <div class="alabel">Production</div>
+      <div class="actions">
+        <button class="btn btn-primary" onclick="act('next')">Queue a new video</button>
+        <!-- one click away from making every waiting film public at once, and an audience
+             sees it the moment it lands: bulk gets the same two steps as clearing -->
+        <button class="btn" data-confirm="Publish every waiting film now?" onclick="confirmAct(this,'publish')">Publish everything waiting</button>
+        <button class="btn" onclick="act('refresh_channel')">Refresh channel data</button>
+      </div>
+    </div>
+    <div class="agroup">
+      <div class="alabel">Automatic work</div>
+      <div class="actions">
+        <button class="btn" id="btn-pauseresume" onclick="act(this.dataset.a)" data-a="pause">Pause auto work</button>
+        <button class="btn" onclick="act('retry')">Retry failed jobs</button>
+      </div>
+    </div>
+    <div class="agroup danger">
+      <div class="alabel">Clearing</div>
+      <div class="actions">
+        <button class="btn btn-danger" data-confirm="Clear the failed jobs from the queue?" onclick="confirmAct(this,'clear_failed')">Clear failed jobs</button>
+        <button class="btn btn-danger" data-confirm="Wipe the queue and drop pending approvals?" onclick="confirmAct(this,'clear_all')">Clear everything</button>
+      </div>
+      <div class="note" style="font-size:12.5px;color:var(--muted);margin-top:8px">Neither one deletes a video from YouTube; uploads waiting on you stay private.</div>
+    </div>
+  </div>
+
+  <div class="sec"><h2>Topic guidance</h2><span class="note">What the growth analysis is steering toward.</span></div>
+  <div class="prose" id="direction"></div>
+
+  <div class="sec"><h2>Used topics</h2><span class="note">Already filmed; kept off future scripts.</span></div>
+  <div class="tags" id="topics"></div>
+</section>
+
+<!-- ============ LEDGER ============ -->
+<section class="tab" id="t-ledger" role="tabpanel" aria-labelledby="tab-ledger">
+  <div class="sec"><h2>Ledger</h2><span class="note">The agent's activity, Dhaka time.</span></div>
+  <div class="log" id="log" tabindex="0" aria-label="Activity log"></div>
+</section>
+
 </div>
-<div id="toast"></div>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<style>.visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}</style>
 <script>
-let DATA=null,PAUSED=false,VIDSORT={k:'views',asc:false};
-function tab(t){document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));
- document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x.id=='t-'+t))}
-function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
-function toast(m,ok){const t=document.getElementById('toast');t.textContent=m;t.className=ok?'toast-ok':'';t.style.opacity=1;
- setTimeout(()=>t.style.opacity=0,2600)}
-function fmt(n){return (n||0).toLocaleString()}
+let DATA=null, PAUSED=false, LAST={};
+const $ = id => document.getElementById(id);
+const esc = s => String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
+/* the render pipeline supplies these urls; only http(s) may become a live href, and
+   an empty one is not a link at all rather than an href="" that reloads the panel */
+const safeUrl = u => /^https?:\/\//i.test(String(u||"")) ? String(u) : "";
+/* A four-column header above a one-sentence empty state is a broken-looking table: the
+   sentence is the only cell sizing anything, so the names slide out from over their
+   columns. With no rows there is nothing for them to name, so they go. */
+function headIf(tbodyId){
+  const tb = $(tbodyId), t = tb.closest("table");
+  if (t) t.classList.toggle("nohead", !!tb.querySelector(".empty"));
+}
+const fmt = n => (n||0).toLocaleString("en-US");
+const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+/* the API sends 2026-09-02; a table column reads better as Sep 2 */
+const shortDate = s => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s||""));
+  return m ? MON[+m[2]-1] + " " + (+m[3]) : String(s||"");
+};
 
-async function load(){
- const r=await fetch('/api/state');if(!r.ok)return;
- DATA=await r.json();render();
+/* ---- tabs (hash-routed, so every view is a shareable link) ---- */
+const TABS = [...document.querySelectorAll("nav [role=tab]")];
+function showTab(t, push){
+  const b = TABS.find(x => x.dataset.t === t) || TABS[0];
+  TABS.forEach(x => x.setAttribute("aria-selected", String(x === b)));
+  document.querySelectorAll("section.tab").forEach(s => s.classList.toggle("on", s.id === "t-"+b.dataset.t));
+  if (push && location.hash.slice(1) !== b.dataset.t) history.replaceState(null, "", "#"+b.dataset.t);
+  /* a chart measured while its tab was hidden has no width — remeasure now */
+  if (b.dataset.t === "desk") drawCharts();
 }
-function render(){
- const d=DATA;
- // health
- const h=d.worker.mins_ago<10?'ok':d.worker.mins_ago<70?'warn':'bad';
- document.getElementById('health').innerHTML=
-  '<span class="dot '+h+'"></span><span class="muted">worker '+d.worker.mins_ago+'m · brain '+d.uptime+'</span>';
- document.getElementById('live').textContent=(PAUSED?'⏸ ':'')+'auto-refresh '+(PAUSED?'paused':'15s')+' · '+new Date().toLocaleTimeString();
- // stat cards
- const C=(t,v,s)=>'<div class="card"><h2>'+t+'</h2><div class="stat">'+v+'</div><div class="muted">'+(s||'')+'</div></div>';
- const trust=d.settings.approved+' / 10';
- document.getElementById('statcards').innerHTML=
-  C('Subscribers',fmt(d.channel.subs),d.delta.subs!=null?'<span class="delta '+(d.delta.subs>=0?'up':'down')+'">'+(d.delta.subs>=0?'+':'')+d.delta.subs+' today</span>':'first reading')+
-  C('Total views',fmt(d.channel.views),d.delta.views!=null?'<span class="delta '+(d.delta.views>=0?'up':'down')+'">'+(d.delta.views>=0?'+':'')+fmt(d.delta.views)+' today</span>':'first reading')+
-  C('Videos',fmt(d.channel.videos),d.channel.public+' public · '+d.channel.private+' private')+
-  C('Queue',d.queue.pending+' <small>pending</small>',d.queue.claimed+' claimed · '+d.queue.failed+' failed')+
-  C('Decisions',d.queue.awaiting+' <small>awaiting</small>','tap Decisions tab')+
-  C('Auto-approve',d.settings.auto_approve?'<span style="color:var(--ok)">ON</span>':'<span style="color:var(--dim)">off</span>','trust '+trust+' · '+(d.settings.paused?'PAUSED':'running'));
- // sparklines
- spark('c-subs',d.history.map(x=>x.subs));spark('c-views',d.history.map(x=>x.views));
- document.getElementById('subs-note').textContent=d.history.length+' days of history';
- document.getElementById('views-note').textContent=d.history.length+' days of history';
- // hooks
- const hs=d.hooks.slice(-12).reverse().map(x=>{
-  const c=x.score>=80?'hi':x.score>=60?'mid':'lo';
-  return '<div><span class="score '+c+'">'+x.score+'</span> — '+esc(x.reason||x.id)+'</div>'}).join('');
- document.getElementById('hooks').innerHTML=hs||'<div>(no scores yet)</div>';
- // trust bar
- document.getElementById('trust').innerHTML='Approvals: <b>'+d.settings.approved+'</b>/10'+
-  '<div class="bar"><i style="width:'+(d.settings.approved*10)+'%"></i></div>'+
-  '<p class="muted" style="margin-top:6px">'+(d.settings.auto_approve?'Auto-approve is ON — new videos publish themselves after render.':'10 manual ✅s enable auto-approve.')+'</p>';
- // queue
- let q='<table><tr><th></th><th>id</th><th>type</th><th>status</th><th>age</th><th>title</th></tr>';
- if(!d.jobs.length)q+='<tr><td colspan="6" class="muted">Queue empty — make a video from the Tools tab</td></tr>';
- for(const j of d.jobs.slice(-15).reverse()){
-  q+='<tr><td class="st-'+j.status+'">'+({pending:'⏳',claimed:'🔧',done:'✅',failed:'❌'}[j.status]||'❓')+'</td><td><code>'+j.id.slice(0,8)+'</code></td><td>'+j.type+'</td><td class="st-'+j.status+'">'+j.status+'</td><td>'+j.age+'m</td><td>'+esc(j.title)+'</td></tr>'}
- document.getElementById('queue').innerHTML=q+'</table>';
- // videos table
- let v='';
- if(!d.videos.length)v='<tr><td colspan="7" class="muted">No videos yet</td></tr>';
- for(const x of d.videos){
-  v+='<tr><td><a href="https://youtu.be/'+x.id+'" target="_blank">'+esc(x.title.slice(0,52))+'</a></td>'+
-  '<td><span class="badge '+(x.privacy==='public'?'pub':'priv')+'">'+x.privacy+'</span></td>'+
-  '<td><b>'+fmt(x.views)+'</b></td><td>'+fmt(x.likes)+'</td><td>'+fmt(x.comments)+'</td><td class="muted">'+x.published+'</td>'+
-  '<td>'+(x.privacy!=='public'?'<button class="btn sm" onclick="act(\'vpub:'+x.id+'\')">Make public</button>':'')+
-  ' <button class="btn ghost sm" onclick="act(\'vpriv:'+x.id+'\')">Private</button></td></tr>'}
- document.getElementById('vidbody').innerHTML=v;
- // pending
- let ph='';
- if(!d.pending.length)ph='<p class="muted">Nothing awaiting decision. Renders land here automatically.</p>';
- for(const x of d.pending){
-  ph+='<div class="videorow"><a href="'+x.url+'" target="_blank">🎬 '+esc(x.title)+'</a>'+
-   '<span class="badge">'+x.formats+' formats</span><span class="muted">'+x.alts+' alt titles</span><span class="grow"></span>'+
-   '<button class="btn" onclick="act(\'publish:'+x.id+'\')">✅ Publish</button>'+
-   '<button class="btn ghost" style="background:#4a1a1a" onclick="if(confirm(\'Delete from YouTube permanently?\'))act(\'reject:'+x.id+'\')">❌ Delete</button></div>';
-  if(x.alts)for(let i=0;i<x.alts.length;i++)
-   ph+='<div class="videorow" style="padding-left:24px"><span class="muted">alt '+(i+2)+':</span> <span>'+esc(x.alts[i])+'</span><span class="grow"></span><button class="btn ghost sm" onclick="act(\'retitle:'+x.id+':'+i+'\')">Use this title</button></div>';
- }
- document.getElementById('pending').innerHTML=ph;
- // tools
- document.getElementById('direction').textContent=d.direction||'(no growth analysis yet — accumulates after ~3 public videos)';
- document.getElementById('topics').textContent=d.used_topics.join(' · ')||'(none)';
- // log
- document.getElementById('log').innerHTML=d.log.map(l=>{
-  const m=l.match(/^(\d\d:\d\d:\d\d)(.*)$/);return m?'<div><span class="t">'+m[1]+'</span>'+esc(m[2])+'</div>':'<div>'+esc(l)+'</div>'}).join('');
+TABS.forEach(b => b.addEventListener("click", () => showTab(b.dataset.t, true)));
+addEventListener("hashchange", () => showTab(location.hash.slice(1), false));
+showTab(location.hash.slice(1), false);
+
+/* ---- toast ---- */
+let toastTimer;
+function toast(msg, err){
+  const t = $("toast");
+  t.textContent = msg; t.className = err ? "err show" : "show";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 3000);
 }
-function spark(id,arr){
- const c=document.getElementById(id);if(!c||arr.length<2){if(c)c.getContext('2d').clearRect(0,0,c.width,c.height);return}
- c.width=c.offsetWidth*2;c.height=240;const g=c.getContext('2d');
- const min=Math.min(...arr),max=Math.max(...arr),rg=(max-min)||1;
- g.strokeStyle='#b21818';g.lineWidth=4;g.beginPath();
- arr.forEach((v,i)=>{const x=i/(arr.length-1)*(c.width-20)+10,y=220-(v-min)/rg*190;i?g.lineTo(x,y):g.moveTo(x,y)});
- g.stroke();
- g.fillStyle='#b21818';arr.forEach((v,i)=>{const x=i/(arr.length-1)*(c.width-20)+10,y=220-(v-min)/rg*190;
-  g.beginPath();g.arc(x,y,5,0,7);g.fill()});
-}
-function sortV(k){VIDSORT.asc=VIDSORT.k===k?!VIDSORT.asc:false;VIDSORT.k=k;
- DATA.videos.sort((a,b)=>{const x=a[VIDSORT.k],y=b[VIDSORT.k];
-  return (typeof x=='number'?x-y:String(x).localeCompare(String(y)))*(VIDSORT.asc?1:-1)});render()}
-async function idea(){
- const t=document.getElementById('idea').value.trim();if(!t)return toast('Type a topic first');
- toast('Writing script…');
- const r=await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'idea',topic:t})});
- const d=await r.json();toast(d.ok?'Script queued — rendering soon':'Failed: '+(d.error||''),d.ok);
- if(d.ok)document.getElementById('idea').value='';
- load();
-}
+
+/* ---- action buttons ---- */
+const NICE = {next:"New video queued",publish:"Published",retry:"Jobs requeued",pause:"Paused",
+  resume:"Resumed",clear_failed:"Failed jobs cleared",clear_all:"Everything cleared",
+  reset:"Counter reset",toggle_auto:"Auto-approve toggled",refresh_channel:"Channel data refreshed",
+  idea:"Script queued"};
 async function act(a){
- const r=await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:a})});
- const d=await r.json();
- if(d.ok===false){toast('❌ '+(d.error||'failed'));return}
- const nice={next:'New video queued',publish:'Published',retry:(d.requeued||0)+' requeued',pause:'Paused',resume:'Resumed',
-  clear_failed:'Failed jobs cleared',clear_all:'Everything cleared',reset:'Counter reset',toggle_auto:'Auto-approve toggled',
-  refresh_channel:'Channel data refreshed',idea:'Script queued'};
- if(a.startsWith('publish:'))toast('Published ✅',1);
- else if(a.startsWith('reject:'))toast('Deleted 🗑');
- else if(a.startsWith('vpub:'))toast('Video public',1);
- else if(a.startsWith('vpriv:'))toast('Video private');
- else if(a.startsWith('retitle:'))toast('Title updated ✏️',1);
- else toast(nice[a]||'Done',1);
- load();
+  try {
+    const r = await fetch("/api/action",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:a})});
+    const d = await r.json();
+    if (d.ok === false) { toast((d.error||"failed"), true); return; }
+    if (a.startsWith("publish:")) toast("Published");
+    else if (a.startsWith("reject:")) toast("Deleted from YouTube");
+    else if (a.startsWith("vpub:")) toast("Video is public");
+    else if (a.startsWith("vpriv:")) toast("Video is private");
+    else if (a.startsWith("retitle:")) toast("Title updated");
+    else toast(NICE[a] || "Done");
+    load();
+  } catch(e) { toast("Network error", true); }
 }
-load();setInterval(()=>{if(!PAUSED)load()},15000);
-document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!PAUSED)load()});
-</script></body></html>"""
+/* Buttons that render() generates carry their action in data-act and are handled
+   here. An id interpolated into an inline onclick would be HTML-decoded and then
+   parsed as code, and one listener outlives every re-render of these containers. */
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-act]");
+  if (!b) return;
+  if (b.dataset.confirm) confirmAct(b, b.dataset.act);
+  else act(b.dataset.act);
+});
+
+/* two-step inline confirm for destructive actions */
+function confirmAct(btn, action){
+  /* the Clearing buttons are static markup — render() never rewrites them, so the
+     armed state has to be undone here or the label stays "Confirm: …" for good */
+  if (btn.dataset.armed) {
+    delete btn.dataset.armed;
+    btn.classList.remove("confirm");
+    if (btn.dataset.label) btn.textContent = btn.dataset.label;
+    act(action);
+    return;
+  }
+  const msg = btn.dataset.confirm || "Are you sure?";
+  btn.dataset.armed = "1"; btn.classList.add("confirm"); btn.dataset.label = btn.textContent;
+  btn.textContent = "Confirm: " + msg.replace(/\?$/,"");
+  setTimeout(() => { if (btn.dataset.armed) { delete btn.dataset.armed; btn.classList.remove("confirm"); btn.textContent = btn.dataset.label; } }, 4000);
+}
+async function idea(){
+  const t = $("idea").value.trim();
+  if (!t) { toast("Type a topic first", true); return; }
+  toast("Writing the script…");
+  /* same guard as act(): a dropped connection must not leave the last toast
+     standing as if the script were on its way */
+  try {
+    const r = await fetch("/api/action",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"idea",topic:t})});
+    const d = await r.json();
+    toast(d.ok ? "Script queued, rendering soon" : ("Failed: "+(d.error||"")), !d.ok);
+    if (d.ok) $("idea").value = "";
+    load();
+  } catch(e) { toast("Network error", true); }
+}
+
+/* ---- data cycle ---- */
+async function load(){
+  try {
+    const r = await fetch("/api/state");
+    if (!r.ok) throw new Error(r.status);
+    DATA = await r.json();
+    $("loadfail").hidden = true;
+    render();
+    if (!COUNTED) { COUNTED = true; countUp(); }
+  } catch(e) {
+    /* a drop mid-session keeps the last render; a cold start has nothing to keep */
+    if (!DATA) $("loadfail").hidden = false;
+  }
+}
+let COUNTED = false;
+/* the one load moment: KPI numbers count up on first arrival */
+function countUp(){
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  document.querySelectorAll("#kpis .value").forEach(el => {
+    const txt = el.textContent, m = txt.replace(/[^0-9]/g,"");
+    if (!m) return;
+    const target = parseInt(m, 10), t0 = performance.now(), dur = 650;
+    const prefix = txt.slice(0, txt.indexOf(m)), suffix = txt.slice(txt.indexOf(m)+m.length);
+    function frame(t){
+      const p = Math.min(1, (t-t0)/dur), e = 1-Math.pow(1-p,3);
+      el.textContent = prefix + fmt(Math.round(target*e)) + suffix;
+      if (p < 1) requestAnimationFrame(frame); else el.textContent = txt;
+    }
+    requestAnimationFrame(frame);
+  });
+}
+
+/* ---- render ---- */
+function render(){
+  const d = DATA;
+  /* heartbeat */
+  const led = $("beatled"), m = d.worker.mins_ago;
+  let cls = "bad", txt = "worker never seen";
+  if (m !== "" && m != null) {
+    const mins = Number(m);
+    if (mins < 10) { cls = "ok"; txt = "worker " + mins + "m ago"; }
+    else if (mins < 70) { cls = "warn"; txt = "worker " + mins + "m ago"; }
+    else { txt = "worker " + mins + "m ago"; }
+  }
+  led.className = "led " + cls;
+  $("beattxt").textContent = txt;
+  $("star").classList.toggle("live", cls === "ok");
+  $("uptime").textContent = "up " + String(d.uptime || "").replace(/^0h\s*/, "");
+  /* only the client flag belongs here: the 15s interval consults PAUSED and never the
+     server's auto-work pause, so folding settings.paused in made this claim refreshing
+     had stopped while it carried on. The old static aria-label also overrode the visible
+     text, hiding the state — the name now says what the next click will do. */
+  $("refresh").textContent = (PAUSED ? "auto-refresh off" : "auto-refresh 15s") + ", updated " + new Date().toLocaleTimeString("en-US",{hour12:false});
+  $("refresh").setAttribute("aria-label", PAUSED ? "Resume auto-refresh" : "Pause auto-refresh");
+  $("refresh").classList.toggle("off", PAUSED);
+  $("pausedflag").hidden = !d.settings.paused;
+
+  /* nav badge */
+  const nb = $("navdec");
+  nb.textContent = d.queue.awaiting;
+  nb.classList.toggle("zero", !d.queue.awaiting);
+
+  /* KPI tiles */
+  const tiles = [];
+  tiles.push(tile("Subscribers", fmt(d.channel.subs), deltaSub(d.delta.subs), sparkHTML(d.history.map(x=>x.subs))));
+  tiles.push(tile("Views", fmt(d.channel.views), deltaSub(d.delta.views), sparkHTML(d.history.map(x=>x.views))));
+  tiles.push(tile("Films", fmt(d.channel.videos), null, null, d.channel.public + " public, " + d.channel.private + " private"));
+  tiles.push(tile("Queue", d.queue.pending, null, null, d.queue.claimed + " rendering, " + d.queue.failed + " failed"));
+  tiles.push(tile("Decisions", d.queue.awaiting, null, null, d.queue.awaiting ? "waiting on you" : "nothing waiting"));
+  tiles.push(tile("Auto-approve", d.settings.auto_approve ? "on" : "off", null, null,
+    "trust " + d.settings.approved + " of 10" + (d.settings.paused ? ", paused" : "")));
+  $("kpis").innerHTML = tiles.join("");
+
+  /* charts */
+  $("chartnote").textContent = d.history.length + (d.history.length === 1 ? " day of history" : " days of history");
+  drawCharts();
+  fillTable("tbl-subs", d.history.map(h=>[h.date,fmt(h.subs)]));
+  fillTable("tbl-views", d.history.map(h=>[h.date,fmt(h.views)]));
+
+  /* hooks — the bar carries the ramp, the number stays ink */
+  $("hooks").innerHTML = d.hooks.slice(-10).reverse().map(h => {
+    const col = hookColor(h.score);
+    return '<div class="rowline"><span class="sc">'+h.score+'</span>'+
+      '<span class="scorebar" role="img" aria-label="score '+h.score+' of 100"><i style="width:'+h.score+'%;background:'+col+'"></i></span>'+
+      '<span class="grow" style="font-size:14px;color:var(--muted)">'+esc(h.reason||h.id)+'</span></div>';
+  }).join("") || '<div class="empty">No scores yet — they arrive with each script.</div>';
+
+  /* trust meter */
+  const n = Math.min(10, Math.max(0, d.settings.approved));
+  $("meter").innerHTML = Array.from({length:10},(_,i)=>"<i"+(i<n?' class="f"':"")+"></i>").join("");
+  $("meter").setAttribute("aria-label", d.settings.approved + " of 10 approvals");
+  $("trustnote").textContent = d.settings.auto_approve
+    ? "On. New videos publish themselves after render."
+    : "10 manual approvals turn it on. Currently " + d.settings.approved + ".";
+  $("btn-auto").textContent = d.settings.auto_approve ? "Turn auto-approve off" : "Turn auto-approve on";
+
+  /* one button for a two-state thing: it names what it will do next */
+  const pr = $("btn-pauseresume");
+  pr.dataset.a = d.settings.paused ? "resume" : "pause";
+  pr.textContent = d.settings.paused ? "Resume auto work" : "Pause auto work";
+
+  /* jobs */
+  $("queuenote").textContent = d.queue.pending + " waiting, " + d.queue.claimed + " rendering, " + d.queue.failed + " failed";
+  const STMAP = {pending:["wait","waiting"],claimed:["render","rendering"],done:["done","done"],failed:["fail","failed"]};
+  $("jobs").innerHTML = d.jobs.slice(-12).reverse().map(j => {
+    const st = STMAP[j.status] || ["off","unknown"];
+    /* .cl labels are hidden until the table reflows into blocks on phones */
+    return '<tr><td class="ttl lead">'+esc(j.title||j.type)+'</td>'+
+      '<td><span class="cl">Status</span><span class="st st-'+st[0]+'"><span class="dot"></span>'+st[1]+'</span></td>'+
+      '<td class="num"><span class="cl">Age</span>'+j.age+'m</td>'+
+      '<td class="mono"><span class="cl">Job</span>'+esc(String(j.id).slice(0,8))+'</td></tr>';
+  }).join("") || '<tr><td colspan="4" class="empty">Queue is empty. Commission a video from the Studio tab.</td></tr>';
+  headIf("jobs");
+
+  /* films */
+  document.querySelectorAll("#t-films th.sortable").forEach(th => {
+    const k = th.dataset.k;
+    let dir = null;
+    if (VID.k === k) dir = VID.asc ? "ascending" : "descending";
+    th.setAttribute("aria-sort", dir || "none");
+    th.firstElementChild.innerHTML = esc(THLABEL[k]) + (dir ? ' <span class="arr">' + (VID.asc ? "▲" : "▼") + '</span>' : "");
+  });
+  $("sortk").value = VID.k;
+  $("sortdir").setAttribute("aria-pressed", String(VID.asc));
+  /* sort on every render, so the order always matches what the controls claim */
+  $("vids").innerHTML = d.videos.slice().sort(cmpVid).map(v =>
+    '<tr><td class="lead"><a class="ttl" href="https://youtu.be/'+esc(v.id)+'" target="_blank" rel="noopener">'+esc(v.title)+'</a></td>'+
+    '<td><span class="cl">Status</span><span class="chip '+(v.privacy==="public"?"pub":"priv")+'"><span class="dot"></span>'+esc(v.privacy)+'</span></td>'+
+    '<td class="num"><span class="cl">Views</span><b>'+fmt(v.views)+'</b></td>'+
+    '<td class="num"><span class="cl">Likes</span>'+fmt(v.likes)+'</td>'+
+    '<td class="num"><span class="cl">Comments</span>'+fmt(v.comments)+'</td>'+
+    '<td style="color:var(--muted)"><span class="cl">Published</span>'+esc(shortDate(v.published))+'</td>'+
+    '<td class="act">'+(v.privacy !== "public"
+      ? '<button class="linkbtn" data-act="vpub:'+esc(v.id)+'">Make public</button>'
+      : '<button class="linkbtn" data-act="vpriv:'+esc(v.id)+'">Make private</button>')+'</td></tr>'
+  ).join("") || '<tr><td colspan="7" class="empty">No films yet — the first one appears here once a render finishes.</td></tr>';
+  headIf("vids");
+
+  /* decisions */
+  $("decisions").innerHTML = d.pending.map(p =>
+    '<div class="card">'+
+    '<div class="rowline" style="border:0;padding:0 0 6px">'+
+      (safeUrl(p.url)
+        ? '<a class="ttl" style="font-size:16px" href="'+esc(safeUrl(p.url))+'" target="_blank" rel="noopener">'+esc(p.title)+'</a>'
+        : '<span class="ttl" style="font-size:16px">'+esc(p.title)+'</span>')+
+      '<span class="grow"></span>'+
+      '<span class="chip">'+p.formats+(p.formats === 1 ? ' format' : ' formats')+'</span></div>'+
+    '<div class="actions">'+
+      '<button class="btn btn-primary" data-act="publish:'+esc(p.id)+'">Publish</button>'+
+      '<button class="btn btn-danger" data-confirm="Delete from YouTube permanently?" data-act="reject:'+esc(p.id)+'">Delete</button>'+
+    '</div>'+
+    (p.alts && p.alts.length ? '<div style="margin-top:12px">'+
+      '<div style="font-size:13.5px;color:var(--muted);margin-bottom:2px">Alternative titles</div>'+
+      p.alts.map((a,i) => '<div class="rowline" style="padding:8px 0"><span class="grow">'+esc(a)+'</span>'+
+        '<button class="btn btn-sm" data-act="retitle:'+esc(p.id)+':'+i+'">Use this title</button></div>').join("")+
+    '</div>' : '')+
+    '</div>'
+  ).join("") || '<div class="card empty" style="border-style:dashed">Nothing waiting. Finished renders land here for your call, and in Telegram.</div>';
+
+  /* studio */
+  $("direction").textContent = d.direction || "No growth analysis yet. It starts writing itself after about three public films.";
+  $("topics").innerHTML = d.used_topics.length
+    ? d.used_topics.map(t => '<span class="chip">'+esc(t)+'</span>').join("")
+    : '<span class="note" style="color:var(--muted);font-size:13px">None yet</span>';
+
+  /* ledger */
+  $("log").innerHTML = d.log.map(l => {
+    const m = String(l).match(/^(\d\d:\d\d:\d\d)(.*)$/);
+    return m ? '<div><span class="lt">'+m[1]+'</span>'+esc(m[2])+'</div>' : '<div>'+esc(l)+'</div>';
+  }).join("") || '<div>(quiet so far)</div>';
+}
+
+function tile(label, value, delta, spark, sub){
+  return '<div class="tile"><div class="label">'+esc(label)+'</div>'+
+    '<div class="value">'+value+'</div>'+
+    (spark || '') +
+    (delta || '') + (sub ? '<div class="sub">'+esc(sub)+'</div>' : '') + '</div>';
+}
+function deltaSub(n){
+  if (n == null) return '';
+  const cls = n > 0 ? "up" : n < 0 ? "down" : "flat";
+  const sign = n > 0 ? "+" : "";
+  return '<div class="delta '+cls+'">'+sign+fmt(n)+' today</div>';
+}
+
+/* ---- sparklines (stat-tile spec: de-emphasis line, accent current point) ---- */
+function sparkHTML(arr){
+  /* nothing to trace with one day, and an all-zero series gets no line here either,
+     so the tile and its chart tell the same story */
+  if (!arr || arr.length < 2 || Math.max(...arr) === 0) return '';
+  const w=96,h=26,pad=3;
+  const min=Math.min(...arr),max=Math.max(...arr),rg=(max-min)||1;
+  /* a flat series has nothing to slope: sat on the floor of the box it reads as a
+     stray rule, so run it through the middle instead */
+  const flat = max === min;
+  const pts=arr.map((v,i)=>[pad+i/(arr.length-1)*(w-2*pad), flat ? h/2 : h-pad-(v-min)/rg*(h-2*pad)]);
+  const d=pts.map((p,i)=>(i?"L":"M")+p[0].toFixed(1)+" "+p[1].toFixed(1)).join("");
+  const last=pts[pts.length-1];
+  return '<svg class="spark" width="'+w+'" height="'+h+'" viewBox="0 0 '+w+' '+h+'" aria-hidden="true">'+
+    '<path d="'+d+'" fill="none" stroke="#8a8574" stroke-width="1.5" stroke-linecap="round"/>'+
+    '<circle cx="'+last[0].toFixed(1)+'" cy="'+last[1].toFixed(1)+'" r="3" fill="#b21818" stroke="#fffdf6" stroke-width="1.5"/></svg>';
+}
+
+/* ---- hook bars: one red ramp, light -> dark with score ---- */
+function hookColor(s){
+  const t=Math.max(0,Math.min(100,s))/100;
+  const a=[236,199,199],b=[143,20,20]; /* #ecc7c7 -> #8f1414 */
+  const c=a.map((x,i)=>Math.round(x+(b[i]-x)*t));
+  return "rgb("+c.join(",")+")";
+}
+
+/* ---- line chart: single series, crosshair + tooltip ---- */
+function drawCharts(){
+  if (!DATA) return;
+  lineChart("plot-subs", "subs", "Subscribers", DATA.history);
+  lineChart("plot-views", "views", "Views", DATA.history);
+}
+function lineChart(elId, key, label, history){
+  const host = $(elId);
+  const arr = history.map(h => ({x:h.date, y:h[key]})).filter(p => p.y != null);
+  /* with one point there is no line to draw and nothing for the table to say */
+  const det = host.parentElement.querySelector("details.tbl");
+  if (det) det.hidden = arr.length < 2;
+  if (arr.length < 2) { host.innerHTML = '<div class="empty">Not enough history yet — the chart draws after two daily reports.</div>'; return; }
+
+  const W=Math.max(280, host.clientWidth || 560), H=190, PL=8, PR=58, PT=12, PB=24;
+  const min=Math.min(...arr.map(p=>p.y)), max=Math.max(...arr.map(p=>p.y));
+  /* a series that is all zeros would draw a line along its own baseline under 180px
+     of void: a sentence carries the same fact and does not look broken */
+  if (min === 0 && max === 0) {
+    host.innerHTML = '<div class="empty">No '+esc(label.toLowerCase())+' yet — the line starts on the first day that registers.</div>';
+    return;
+  }
+  /* a flat series (same count two days running) has no span to pad — give it a
+     window of its own, or every y would divide by zero and the path go NaN */
+  const span = max - min;
+  let lo = span ? min - span*0.08 : min - Math.max(2, Math.abs(min)*0.1);
+  let hi = span ? max + span*0.08 : max + Math.max(2, Math.abs(max)*0.1);
+  if (min >= 0 && lo < 0) lo = 0;   /* counts are never negative */
+  const X = i => PL + i/(arr.length-1)*(W-PL-PR);
+  const Y = v => PT + (1-(v-lo)/(hi-lo))*(H-PT-PB);
+  const pts = arr.map((p,i)=>[X(i),Y(p.y)]);
+
+  /* clean y ticks, then drop any that would sit on the end-value label */
+  const ticks = niceTicks(lo, hi, 4, 1);
+  const dPath = pts.map((p,i)=>(i?"L":"M")+p[0].toFixed(1)+" "+p[1].toFixed(1)).join(" ");
+  const area = dPath + "L"+pts[pts.length-1][0].toFixed(1)+" "+(H-PB)+"L"+pts[0][0].toFixed(1)+" "+(H-PB)+'Z';
+  const last=pts[pts.length-1], first=pts[0];
+  const endLbl = fmt(arr[arr.length-1].y);
+  const shown = ticks.filter(v => Math.abs(Y(v) - last[1]) > 18);
+
+  host.innerHTML =
+   '<svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none" role="img" aria-label="'+label+' line chart, latest '+endLbl+'">'+
+    ticks.map(v=>'<line class="grid" x1="'+PL+'" x2="'+(W-PR)+'" y1="'+Y(v).toFixed(1)+'" y2="'+Y(v).toFixed(1)+'"/>').join("")+
+    '<path class="area" d="'+area+'"/>'+
+    '<path class="line" d="'+dPath+'"/>'+
+    shown.map(v=>'<text class="axis" x="'+(W-PR+9)+'" y="'+(Y(v)+4).toFixed(1)+'" text-anchor="start">'+compactTick(v)+'</text>').join("")+
+    '<text class="axis" x="'+PL+'" y="'+(H-6)+'">'+esc(shortDate(arr[0].x))+'</text>'+
+    '<text class="axis" x="'+(W-PR-4)+'" y="'+(H-6)+'" text-anchor="end">'+esc(shortDate(arr[arr.length-1].x))+'</text>'+
+    '<line class="vline" id="'+elId+'-v" y1="'+PT+'" y2="'+(H-PB)+'"/>'+
+    '<circle class="enddot" cx="'+last[0].toFixed(1)+'" cy="'+last[1].toFixed(1)+'" r="4"/>'+
+    '<text class="axis" x="'+(W-PR+9)+'" y="'+(last[1]+4).toFixed(1)+'" style="font-weight:600;fill:#14141e">'+endLbl+'</text>'+
+    '<rect class="hitrect" x="0" y="0" width="'+W+'" height="'+H+'" id="'+elId+'-hit"/>'+
+   '</svg><div class="tip" id="'+elId+'-tip"></div>';
+
+  /* crosshair */
+  const svg = host.querySelector("svg"), tip = host.querySelector(".tip"), vl = host.querySelector(".vline");
+  function readout(frac, snap){
+    const i = Math.max(0, Math.min(arr.length-1, Math.round(frac*(arr.length-1))));
+    const p = arr[i];
+    tip.style.display="block";
+    tip.innerHTML = '<span class="tv">'+fmt(p.y)+'</span> <span class="td">'+esc(p.x)+'</span>';
+    const px = frac*(svg.getBoundingClientRect().width);
+    tip.style.left = Math.min(Math.max(px+12,8), svg.getBoundingClientRect().width-110)+"px";
+    tip.style.top = "6px";
+    if (snap) {
+      vl.setAttribute("x1",X(i)); vl.setAttribute("x2",X(i)); vl.style.opacity=1;
+      tip.style.left = Math.min(Math.max(X(i)/W*svg.getBoundingClientRect().width+12,8), svg.getBoundingClientRect().width-110)+"px";
+    }
+  }
+  svg.addEventListener("pointermove", e => {
+    const r = svg.getBoundingClientRect();
+    readout((e.clientX-r.left)/r.width, true);
+  });
+  svg.addEventListener("pointerleave", () => { tip.style.display="none"; vl.style.opacity=0; });
+  /* keyboard: arrow through days */
+  svg.tabIndex = 0;
+  svg.setAttribute("aria-label", label+" chart. Use arrow keys to read daily values.");
+  let ki = arr.length-1;
+  svg.addEventListener("keydown", e => {
+    if (e.key==="ArrowLeft"||e.key==="ArrowRight"){
+      e.preventDefault();
+      ki = Math.max(0, Math.min(arr.length-1, ki + (e.key==="ArrowRight"?1:-1)));
+      readout(ki/(arr.length-1), true);
+    }
+  });
+}
+function niceTicks(lo, hi, target, minStep){
+  const span = hi - lo;
+  if (!(span > 0)) return [lo];
+  const raw = span / target;
+  const pow = Math.pow(10, Math.floor(Math.log10(raw)));
+  const n = raw / pow;
+  let step = (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * pow;
+  /* subscribers and views are whole numbers: a 0.5 step would label 0, 0, 1, 1 */
+  if (minStep && step < minStep) step = minStep;
+  const out = [];
+  for (let v = Math.ceil(lo/step)*step; v <= hi + step*1e-9; v += step) out.push(v);
+  return out;
+}
+function compactTick(v){
+  if (v>=1e6) return (v/1e6).toFixed(v%1e6?1:0)+"M";
+  if (v>=1e4) return Math.round(v/1e3)+"k";
+  return fmt(Math.round(v));
+}
+function fillTable(id, rows){
+  $(id).querySelector("tbody").innerHTML = rows.map(r =>
+    "<tr><td>"+esc(r[0])+"</td><td class=\"num\">"+esc(r[1])+"</td></tr>").join("");
+}
+
+/* ---- films sorting ---- */
+const THLABEL = {title:"Title",privacy:"Status",views:"Views",likes:"Likes",comments:"Comments",published:"Published"};
+let VID = {k:"views", asc:false};
+function cmpVid(a,b){
+  const x = a[VID.k], y = b[VID.k];
+  return (typeof x === "number" ? x-y : String(x).localeCompare(String(y))) * (VID.asc?1:-1);
+}
+/* headers on wide screens, a select on phones — both drive the same sort */
+document.querySelector("#t-films thead").addEventListener("click", e => {
+  const th = e.target.closest("th.sortable");
+  if (!th) return;
+  if (VID.k === th.dataset.k) VID.asc = !VID.asc; else { VID.k = th.dataset.k; VID.asc = false; }
+  render();
+});
+$("sortk").addEventListener("change", e => { VID.k = e.target.value; VID.asc = false; render(); });
+$("sortdir").addEventListener("click", () => { VID.asc = !VID.asc; render(); });
+
+/* ---- clock (Dhaka) + auto-refresh ---- */
+function tick(){
+  $("clock").textContent = "Dhaka " + new Intl.DateTimeFormat("en-GB",{hour:"2-digit",minute:"2-digit",timeZone:"Asia/Dhaka"}).format(new Date());
+}
+$("refresh").addEventListener("click", () => { PAUSED = !PAUSED; render(); if(!PAUSED) load(); });
+setInterval(tick, 30000); tick();
+load();
+/* a refresh rewrites the tables under the cursor. Hold it while a destructive
+   button is armed — its 4s window overlaps this 15s one — and while the keyboard
+   is inside a region render() replaces, which would drop focus to the body. */
+function refreshHeld(){
+  if (document.querySelector("[data-armed]")) return true;
+  const a = document.activeElement;
+  return !!(a && a.closest && a.closest("#vids,#pending,#jobs,#hooks"));
+}
+setInterval(() => { if (!PAUSED && !document.hidden && !refreshHeld()) load(); }, 15000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden && !PAUSED) load(); });
+
+/* redraw charts to the new width (debounced) */
+let rsz;
+window.addEventListener("resize", () => {
+  clearTimeout(rsz);
+  rsz = setTimeout(drawCharts, 200);
+});
+
+/* arrow keys walk the tab list */
+document.querySelector("nav").addEventListener("keydown", e => {
+  if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+  const tabs = [...document.querySelectorAll("nav [role=tab]")];
+  const i = tabs.indexOf(document.activeElement);
+  if (i < 0) return;
+  e.preventDefault();
+  const n = tabs[(i + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length];
+  n.focus(); n.click();
+});
+</script>
+</body>
+</html>
+"""
 
 
 _channel_cache = {"t": 0, "data": None}

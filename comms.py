@@ -15,10 +15,32 @@ LOG = []  # last N events, shown by /status
 
 
 def log(event):
-    line = f"{datetime.now() + config.BD_OFFSET:%H:%M:%S} {event}"
+    now = datetime.now() + config.BD_OFFSET
+    line = f"{now:%H:%M:%S} {event}"
     print("[agent]", line)
     LOG.append(line)
     del LOG[:-30]
+    _persist(now, event)
+
+
+def _persist(now, event):
+    """Mirror the line into saved state so the ledger survives a restart.
+
+    LOG is memory-only: Render's free tier restarts often and every line is
+    lost, which is why the panel's Ledger used to look empty. State lives in
+    the gist, so a dated copy there is the only durable record. state is
+    imported lazily (comms is imported first at boot) and save_soon() is
+    debounced + no-ops until state is loaded, so a burst of log lines is one
+    gist write and never a boot-order problem.
+    """
+    try:
+        import state
+        tail = state.STATE.setdefault("log_tail", [])
+        tail.append({"t": f"{now:%Y-%m-%d %H:%M:%S}", "m": str(event)[:240]})
+        del tail[:-250]
+        state.save_soon()
+    except Exception:
+        pass  # logging must never be the thing that breaks
 
 
 def esc(s):

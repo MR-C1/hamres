@@ -6,5 +6,11 @@ services:
     env: python
     plan: free          # IMPORTANT: free, not starter — no card needed
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --timeout 120
+    # --threads 8: the free plan gives one worker, and a single sync worker
+    # serves ONE request at a time — a slow YouTube or Gemini call froze the
+    # panel's own polls. Threads let the panel stay answerable while the
+    # agent thinks. (Long actions also run on their own thread now; this is
+    # the second line of defence.) If this service was created before the
+    # flag existed, edit Start Command in the Render dashboard to match.
+    startCommand: gunicorn app:app --timeout 120 --threads 8
     healthCheckPath: /health

@@ -196,50 +196,14 @@ def _end_card(w, h):
 
 
 def scene_visual(clips, duration, w, h, label="", motion=True):
-    """Build the visual track for one scene: stock clips (or gradient).
-    With motion=True each segment gets a slow alternating zoom (Ken
-    Burns) — static stock crops feel dead; a 4-6% drift makes them read
-    as intentional cinematography."""
-    if not clips:
-        return gradient_clip(duration, w, h, label)
-    segments, remaining, i, opened = [], duration, 0, []
-    while remaining > 0.05:
-        src = VideoFileClip(str(clips[i % len(clips)]))
-        opened.append(src)
-        take = min(remaining, max(src.duration - 0.5, 0.5))
-        start = max(0, (src.duration - take) / 2)
-        seg = src.subclipped(start, start + take)
-        if motion:
-            # alternate zoom directions per segment; 5% over the clip
-            zoom_in = (i % 2 == 0)
-            amt = 0.05
-            if zoom_in:
-                seg = seg.resized(lambda t, d=take: 1 + amt * (t / d))
-            else:
-                seg = seg.resized(lambda t, d=take: 1 + amt - amt * (t / d))
-            # animated size needs a fixed-size canvas: center it and let
-            # the composite clip off the overflow
-            seg = CompositeVideoClip([seg.with_position("center")],
-                                     size=(max(w, seg.w), max(h, seg.h))
-                                     ).with_position("center")
-            seg = CompositeVideoClip([seg], size=(w, h))
-        else:
-            seg = fit(seg, w, h)
-        segments.append(seg)
-        remaining -= take
-        i += 1
-    if not segments:
-        return gradient_clip(duration, w, h, label)
-    if len(segments) == 1:
-        return segments[0]
-    # crossfade between segments — hard cuts between unrelated stock
-    # clips read as glitches; 0.25s blends read as editing
-    from moviepy.video.fx.CrossFadeIn import CrossFadeIn
-    faded = [segments[0]]
-    for s in segments[1:]:
-        faded.append(s.with_effects([CrossFadeIn(0.25)]))
-    return concatenate_videoclips(faded, method="compose",
-                                  padding=-0.25)
+    """Build the visual track for one scene from stock clips.
+
+    Kept as a thin wrapper: montage() is the one place that decides how a
+    block is cut, so there is no second copy of that logic to drift.
+    """
+    return montage([("video", c) for c in (clips or [])],
+                   duration, w, h, label=label, motion=motion,
+                   shot=3.0 if motion else 3.4)
 
 
 def short_hook_text(script):
@@ -255,15 +219,148 @@ def short_hook_text(script):
     return cut
 
 
-def still_visual(path, duration, w, h, zoom=0.13):
+def still_visual(path, duration, w, h, zoom=0.13, variant=0):
     """Documentary Ken Burns: a slow zoom over a REAL archival still —
-    the actual case photo, portrait, document, or newspaper scan."""
+    the actual case photo, portrait, document, or newspaper scan.
+
+    variant alternates the move (push in / pull out) so the same photo can
+    come back later in a block without reading as a freeze-frame.
+    """
     base = ImageClip(str(path)).with_duration(duration)
     scale0 = max(w / base.w, h / base.h) * 1.02
-    scaled = base.resized(
-        lambda t: scale0 * (1 + zoom * (t / max(duration, 0.1))))
+    if variant % 2:
+        scaled = base.resized(
+            lambda t: scale0 * (1 + zoom - zoom * (t / max(duration, 0.1))))
+    else:
+        scaled = base.resized(
+            lambda t: scale0 * (1 + zoom * (t / max(duration, 0.1))))
     return CompositeVideoClip([scaled.with_position("center")],
                               size=(w, h))
+
+
+def _video_shot(path, want, w, h, seq=0, motion=True, keep=None):
+    """One shot cut out of a video file — a different moment on each reuse.
+
+    A 12-minute newsreel used to become ONE unbroken take because the old
+    code asked for the whole block in a single subclip. Asking for ~3s at a
+    time, from a different offset per reuse, turns that same file into five
+    different scenes. Returns (clip, actual_length).
+    """
+    src = VideoFileClip(str(path))
+    if keep is not None:
+        keep.append(src)          # reader must outlive this function
+    take = min(want, max(src.duration - 0.3, 0.4))
+    span = max(0.0, src.duration - take)
+    # spread reuses over the middle 80% — leader frames and end slates are
+    # usually black or a title card. Golden-ratio steps never cluster.
+    frac = 0.5 if span < 1.0 else (0.1 + 0.8 * ((seq * 0.618) % 1.0))
+    start = span * frac
+    seg = src.subclipped(start, start + take)
+    if motion:
+        # alternate zoom directions per shot; 5% over the shot
+        amt = 0.05
+        if seq % 2 == 0:
+            seg = seg.resized(lambda t, d=take: 1 + amt * (t / d))
+        else:
+            seg = seg.resized(lambda t, d=take: 1 + amt - amt * (t / d))
+        # animated size needs a fixed-size canvas: center it and let the
+        # composite clip off the overflow
+        seg = CompositeVideoClip([seg.with_position("center")],
+                                 size=(max(w, seg.w), max(h, seg.h))
+                                 ).with_position("center")
+        seg = CompositeVideoClip([seg], size=(w, h))
+    else:
+        seg = fit(seg, w, h)
+    return seg, take
+
+
+def shot_count(sources, duration, shot=3.0, cap_shots=10):
+    """How many shots one narration block should be cut into.
+
+    Pure arithmetic so it can be checked in milliseconds instead of a
+    15-minute render (see --plan). A film can honestly supply several
+    different moments, a photograph two different moves — asking for more
+    shots than the material has would just repeat the same frames.
+    """
+    if not sources:
+        return 0
+    cap = sum(3 if k == "video" else 2 for k, _ in sources)
+    if len(sources) == 1 and sources[0][0] == "still":
+        # a lone photograph is one continuous move; cutting it against
+        # itself reads as a bounce, not as an edit
+        cap = 1
+    return max(1, min(int(round(duration / max(shot, 1.2))), cap, cap_shots))
+
+
+def shot_order(sources):
+    """Endless round-robin over sources, numbering each reuse.
+
+    The reuse number is what makes a second visit to the same file look
+    different: another moment of a film, the opposite Ken Burns move on a
+    photograph.
+    """
+    uses, i = {}, 0
+    while True:
+        kind, path = sources[i % len(sources)]
+        key = str(path)
+        seq = uses.get(key, 0)
+        uses[key] = seq + 1
+        i += 1
+        yield kind, key, seq
+
+
+def montage(sources, duration, w, h, label="", motion=True, shot=3.0,
+            used=None):
+    """Cut ONE narration block into several shots instead of one long take.
+
+    sources: ordered [(kind, path)] where kind is "video" or "still".
+
+    Why this exists: a 20s Short came out as literally one clip and one
+    photograph. The old code took the FIRST archival hit for a block and
+    stretched it across the whole block — one subclip of a long film, or
+    one slow zoom on one image. Here every ~3s gets its own shot, taken
+    from a different source (or a different moment of the same long
+    source), and sources are used round-robin so real footage and real
+    photographs interleave instead of one winning the block outright.
+
+    Paths actually used are appended to `used`, so only material that made
+    it on screen gets credited in the description.
+    """
+    sources = [(k, p) for k, p in sources if p]
+    if not sources:
+        return gradient_clip(duration, w, h, label)
+    n = shot_count(sources, duration, shot)
+    # crossfades overlap by 0.25s, so the shots have to add up to slightly
+    # more than the block for the concatenation to still fill it exactly
+    need = duration + 0.25 * (n - 1)
+    order = shot_order(sources)
+    keep, shots, filled, tries = [], [], 0.0, 0
+    while filled < need - 0.05 and tries < 3 * n:
+        tries += 1
+        left = max(1, n - len(shots))
+        want = max(1.2, (need - filled) / left)
+        kind, path, seq = next(order)
+        try:
+            if kind == "still":
+                shots.append(still_visual(path, want, w, h, variant=seq))
+                got = want
+            else:
+                clip, got = _video_shot(path, want, w, h, seq, motion, keep)
+                shots.append(clip)
+        except Exception as e:      # corrupt download: skip, keep cutting
+            log.warning("shot failed (%s): %s", Path(path).name, e)
+            continue
+        filled += got
+        if used is not None and path not in used:
+            used.append(path)
+    if not shots:
+        return gradient_clip(duration, w, h, label)
+    if len(shots) == 1:
+        return shots[0]
+    from moviepy.video.fx.CrossFadeIn import CrossFadeIn
+    faded = [shots[0]] + [s.with_effects([CrossFadeIn(0.25)])
+                          for s in shots[1:]]
+    return concatenate_videoclips(faded, method="compose", padding=-0.25)
 
 
 def pick_scenes(script, fmt, audio_durations):
@@ -424,27 +521,26 @@ def render_from_dict(script, config):
             # directive: real material must dominate. Multiple search
             # terms are all tried; stock fills only genuinely abstract
             # connective moments.
-            visual = None
             terms = s.get("archive_search", [])
+            vids_pool, stills_pool, seen_paths = [], [], set()
             for term in terms:
-                vids = archives.search_archive_video(term)
-                if vids:
-                    pick = vids[scene_no % len(vids)]
-                    visual = scene_visual([Path(pick["path"])], d, w, h,
-                                          motion=(fmt == "short"))
-                    credits.append(pick)
-                    break
-            if visual is None:
-                arch_pool, seen_paths = [], set()
-                for term in terms:
-                    for a in archives.search_commons(term):
-                        if a["path"] not in seen_paths:
-                            seen_paths.add(a["path"])
-                            arch_pool.append(a)
-                if arch_pool:
-                    pick = arch_pool[scene_no % len(arch_pool)]
-                    visual = still_visual(pick["path"], d, w, h)
-                    credits.append(pick)
+                for v in archives.search_archive_video(term):
+                    if v["path"] not in seen_paths:
+                        seen_paths.add(v["path"])
+                        vids_pool.append(v)
+                for a in archives.search_commons(term):
+                    if a["path"] not in seen_paths:
+                        seen_paths.add(a["path"])
+                        stills_pool.append(a)
+            by_path = {x["path"]: x for x in vids_pool + stills_pool}
+            # alternate footage and photographs so a block cuts between
+            # kinds of real material, not just between frames of one film
+            sources = []
+            for i in range(max(len(vids_pool), len(stills_pool))):
+                if i < len(vids_pool):
+                    sources.append(("video", vids_pool[i]["path"]))
+                if i < len(stills_pool):
+                    sources.append(("still", stills_pool[i]["path"]))
 
             # pool: this scene's keyword clips, deduped
             clips, seen = [], set()
@@ -453,23 +549,42 @@ def render_from_dict(script, config):
                     if c.name not in seen:
                         seen.add(c.name)
                         clips.append(c)
-            if visual is None:
-                # VARIETY: prefer clips not used by earlier scenes, then
-                # rotate the order per scene so even a small pool doesn't
-                # repeat the same first clip every time
-                fresh = [c for c in clips if c.name not in used_clips]
-                stale = [c for c in clips if c.name in used_clips]
-                ordered = fresh + stale
-                if ordered and scene_no:
-                    rot = scene_no % len(ordered)
-                    ordered = ordered[rot:] + ordered[:rot]
+            # VARIETY: prefer clips not used by earlier scenes, then
+            # rotate the order per scene so even a small pool doesn't
+            # repeat the same first clip every time
+            fresh = [c for c in clips if c.name not in used_clips]
+            stale = [c for c in clips if c.name in used_clips]
+            ordered = fresh + stale
+            if ordered and scene_no:
+                rot = scene_no % len(ordered)
+                ordered = ordered[rot:] + ordered[:rot]
+
+            if sources:
+                # start each block at a different point in its own pool so
+                # consecutive blocks don't open on the same photograph
+                sources = (sources[scene_no % len(sources):]
+                           + sources[:scene_no % len(sources)])
+                if len(sources) < 2 and ordered:
+                    # one lonely photo can only carry two moves; let stock
+                    # take the connective moments so the block still cuts
+                    sources += [("video", str(c)) for c in ordered[:2]]
+                    used_clips.update(c.name for c in ordered[:2])
+            else:
+                sources = [("video", str(c)) for c in ordered]
                 used_clips.update(c.name for c in ordered[:3])
-                # Ken Burns motion on SHORTS only (where it fights the
-                # feed scroll); long-form keeps static crops — animated
-                # resize costs ~3.4x render time on an 8-12 min long
-                visual = scene_visual(ordered, d, w, h,
-                                      label=kws[0] if kws else "",
-                                      motion=(fmt == "short"))
+
+            # ONE BLOCK, SEVERAL SHOTS: this used to hand the whole block
+            # to a single subclip or a single still, which is why a Short
+            # arrived as one clip plus one photo
+            shown = []
+            visual = montage(sources, d, w, h,
+                             label=kws[0] if kws else "",
+                             motion=(fmt == "short"),
+                             shot=2.6 if fmt == "short" else 3.4,
+                             used=shown)
+            for p in shown:
+                if p in by_path and by_path[p] not in credits:
+                    credits.append(by_path[p])
             video_layers.append(visual.with_start(t).with_duration(d))
             audio_clips.append(AudioFileClip(str(mp3)).with_start(t + 0.1))
             scene_no += 1

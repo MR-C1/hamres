@@ -57,10 +57,34 @@ def _clean(html):
     return s[:180]
 
 
-def search_commons(query, max_images=4, min_width=640):
+def _words(text):
+    return [w for w in re.findall(r"[a-z0-9]+", (text or "").lower())
+            if len(w) > 3]
+
+
+def _relevance(title, query):
+    """How well a result's own title matches what we searched for, 0-2.
+
+    Search engines match descriptions and categories too, so a hit whose
+    title shares no word with the query is usually about something else —
+    the wrong photo over the right narration is the single most damaging
+    thing this pipeline can do. Ranking by title overlap (and rewarding a
+    whole-phrase hit) puts the genuinely-about-this material first.
+    """
+    qw = set(_words(query))
+    if not qw:
+        return 0.0
+    tl = (title or "").lower()
+    score = len(qw & set(_words(tl))) / len(qw)
+    if query.lower().strip() in tl:
+        score += 1.0
+    return score
+
+
+def search_commons(query, max_images=8, min_width=640):
     """Search Wikimedia Commons for real photos matching a query.
     Returns [{title, url, page, license, author, path}] — files are
-    downloaded once and cached per query."""
+    downloaded once and cached per query, best match first."""
     d = _cache_dir(query)
     marker = d / "done.json"
     if marker.exists():
@@ -93,10 +117,11 @@ def search_commons(query, max_images=4, min_width=640):
             break
         r.raise_for_status()
         pages = (r.json().get("query") or {}).get("pages") or {}
-        for p in sorted(pages.values(),
-                        key=lambda x: x.get("index", 99)):
-            if len(results) >= max_images:
-                break
+        # Collect every usable candidate FIRST, then download the most
+        # relevant ones. The old code downloaded in raw search order, so a
+        # loosely-related file could take the one slot a scene had.
+        cands = []
+        for p in sorted(pages.values(), key=lambda x: x.get("index", 99)):
             ii = (p.get("imageinfo") or [{}])[0]
             if ii.get("mime") not in ("image/jpeg", "image/png"):
                 continue
@@ -107,16 +132,32 @@ def search_commons(query, max_images=4, min_width=640):
                          .get("value", ""))
             if not OK_LICENSE_RE.match(lic):
                 continue  # skip odd licenses (fair use etc.)
-            author = _clean((meta.get("Artist") or {}).get("value", "")
-                            or "unknown")
             url = ii.get("thumburl") or ii.get("url")
             if not url:
                 continue
-            dest = d / f"commons_{p['pageid']}.jpg"
+            title = _clean(p.get("title", "").replace("File:", ""))
+            cands.append({
+                "pageid": p["pageid"], "url": url, "title": title,
+                "license": lic,
+                "author": _clean((meta.get("Artist") or {}).get("value", "")
+                                 or "unknown"),
+                "page": ii.get("descriptionurl", ""),
+                "index": p.get("index", 99),
+                "score": _relevance(title, query),
+            })
+        # keep only on-topic hits when there are enough of them; fall back
+        # to everything for obscure subjects where nothing scores
+        strong = [c for c in cands if c["score"] > 0]
+        ranked = sorted(strong if len(strong) >= 3 else cands,
+                        key=lambda c: (-c["score"], c["index"]))
+        for c in ranked:
+            if len(results) >= max_images:
+                break
+            dest = d / f"commons_{c['pageid']}.jpg"
             if not dest.exists():
                 for attempt in (1, 2):
                     _commons_pace()
-                    rr = requests.get(url, headers=UA, timeout=60)
+                    rr = requests.get(c["url"], headers=UA, timeout=60)
                     if rr.status_code == 429 and attempt == 1:
                         time.sleep(3)  # wikimedia rate-limits bursts
                         continue
@@ -126,9 +167,8 @@ def search_commons(query, max_images=4, min_width=640):
                     continue
                 dest.write_bytes(rr.content)
             results.append({
-                "title": _clean(p.get("title", "").replace("File:", "")),
-                "page": ii.get("descriptionurl", ""),
-                "license": lic, "author": author,
+                "title": c["title"], "page": c["page"],
+                "license": c["license"], "author": c["author"],
                 "path": str(dest),
             })
             time.sleep(0.3)  # be polite to the API
@@ -141,18 +181,32 @@ def search_commons(query, max_images=4, min_width=640):
     return results
 
 
-# archive.org period footage — Prelinger / FedFlix are curated
-# public-domain film collections (newsreels, war footage, era film)
-PD_COLLECTIONS = "(prelinger OR fedflix)"
+# archive.org period footage — curated public-domain film collections:
+# Prelinger (ephemeral/industrial film), FedFlix + US National Archives
+# (government film, newsreels, war footage), NASA (space program). All
+# US-government or explicitly PD, so monetization-safe.
+PD_COLLECTIONS = ("(prelinger OR fedflix OR usnationalarchives OR nasa "
+                  "OR nationalarchives)")
 VIDEO_MAX_BYTES = 120 << 20   # skip whole-movie rips; we want clips/reels
+VIDEO_PREF_BYTES = 45 << 20   # best quality we'll spend bandwidth on
+
+
+def _ia_query(q, rows):
+    r = requests.get(
+        "https://archive.org/advancedsearch.php",
+        params={"q": q, "fl[]": ["identifier", "title", "year", "downloads"],
+                "rows": rows, "page": 1, "output": "json"},
+        headers=UA, timeout=30)
+    r.raise_for_status()
+    return (r.json().get("response") or {}).get("docs") or []
 
 
 def search_archive_video(query, max_clips=3):
     """Search archive.org's public-domain film collections for real
     period FOOTAGE (newsreels, government film, war photography).
     Returns [{title, page, license, author, path}] like search_commons,
-    cached per query. Sparse by nature — famous events hit, obscure
-    cases return nothing (then stills/stock take over)."""
+    cached per query, best match first. Sparse by nature — famous events
+    hit, obscure cases return nothing (then stills/stock take over)."""
     d = _cache_dir("video:" + query)
     marker = d / "done.json"
     if marker.exists():
@@ -161,39 +215,51 @@ def search_archive_video(query, max_clips=3):
 
     results = []
     try:
-        # TITLE-phrase match, not full-text: archive.org's full-text
-        # search matches loose description words ("nuclear test" returned
-        # 1950s classroom films) — an unrelated film over the narration
-        # is worse than stock, so precision beats recall here
-        r = requests.get(
-            "https://archive.org/advancedsearch.php",
-            params={
-                "q": f'title:("{query}") AND mediatype:movies '
-                     f"AND collection:{PD_COLLECTIONS}",
-                "fl[]": ["identifier", "title", "year"],
-                "rows": max_clips * 4, "page": 1, "output": "json",
-            },
-            headers=UA, timeout=30)
-        r.raise_for_status()
-        docs = (r.json().get("response") or {}).get("docs") or []
-        # client-side relevance check: a significant query word must
-        # appear in the item title (archive.org phrase match is fuzzy)
-        words = [w for w in query.lower().split() if len(w) > 3]
+        # TITLE match, not full-text: archive.org's full-text search
+        # matches loose description words ("nuclear test" returned 1950s
+        # classroom films) — an unrelated film over the narration is worse
+        # than stock, so precision beats recall here. Pass 1 is the exact
+        # phrase; pass 2 asks for every significant word in the title,
+        # which catches "Roanoke Colony Mystery" for "roanoke colony" —
+        # still title-anchored, just not word-for-word. Ranked by title
+        # overlap so the closest film downloads first.
+        docs, seen_ids = [], set()
+        passes = [f'title:("{query}") AND mediatype:movies '
+                  f"AND collection:{PD_COLLECTIONS}"]
+        words = _words(query)
+        if len(words) > 1:
+            passes.append("title:(" + " AND ".join(words) + ") "
+                          f"AND mediatype:movies "
+                          f"AND collection:{PD_COLLECTIONS}")
+        for pass_no, q in enumerate(passes):
+            if len(docs) >= max_clips * 4:
+                break
+            for doc in _ia_query(q, max_clips * 4):
+                ident = doc.get("identifier")
+                if not ident or ident in seen_ids:
+                    continue
+                seen_ids.add(ident)
+                doc["_pass"] = pass_no
+                doc["_score"] = _relevance(doc.get("title"), query)
+                docs.append(doc)
+        # a significant query word must appear in the item title
+        docs = [x for x in docs
+                if not words or any(w in (x.get("title") or "").lower()
+                                    for w in words)]
+        docs.sort(key=lambda x: (x["_pass"], -x["_score"],
+                                 -int(x.get("downloads") or 0)))
         for doc in docs:
             if len(results) >= max_clips:
                 break
-            title = (doc.get("title") or "")
-            if words and not any(w in title.lower() for w in words):
-                continue
-            ident = doc.get("identifier")
-            if not ident:
-                continue
+            ident = doc["identifier"]
             m = requests.get(f"https://archive.org/metadata/{ident}",
                              headers=UA, timeout=30)
             m.raise_for_status()
             meta = m.json()
-            # pick the smallest playable mp4-ish file
-            best = None
+            # the best-quality playable file we're willing to download:
+            # biggest under VIDEO_PREF_BYTES (the old "smallest" rule
+            # picked 240p derivatives that look like mud upscaled to 1080p)
+            small, big = [], []
             for f in meta.get("files", []):
                 fmt = (f.get("format") or "").lower()
                 name = (f.get("name") or "").lower()
@@ -206,9 +272,13 @@ def search_archive_video(query, max_clips=3):
                     continue
                 if not (2 << 20 < size <= VIDEO_MAX_BYTES):
                     continue
-                if best is None or size < best[1]:
-                    best = (f["name"], size)
-            if not best:
+                (small if size <= VIDEO_PREF_BYTES else big).append(
+                    (f["name"], size))
+            if small:
+                best = max(small, key=lambda t: t[1])
+            elif big:
+                best = min(big, key=lambda t: t[1])
+            else:
                 continue
             fname, _size = best
             import urllib.parse

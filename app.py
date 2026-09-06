@@ -2406,6 +2406,10 @@ def report():
     data = request.get_json(force=True, silent=True) or {}
     job_id = data.get("job_id", "")
     ok = bool(data.get("ok"))
+    # status BEFORE this report: a job already finished, reporting again,
+    # means two runners rendered it (see jobs._claim_ttl)
+    prior = next((j.get("status") for j in state.STATE.get("jobs", [])
+                  if j.get("id") == job_id), None)
     job = jobs.complete_job(job_id, data)
 
     is_render = (job and job["type"] == "render") or (
@@ -2415,7 +2419,16 @@ def report():
     # register it for the owner's decision instead of dropping it.
     if is_render and ok:
         approval_id = (job or {}).get("approval_id") or job_id
-        if data.get("video_url"):
+        if data.get("video_url") and prior == "done":
+            # The same job came back with a second video. Overwriting the
+            # registered entry would strand the first upload — private,
+            # undecidable and invisible — so name the extra copy instead.
+            comms.send(f"⚠️ <b>Rendered twice</b> — job "
+                       f"<code>{comms.esc(job_id)}</code> came back with a "
+                       f"second upload: {comms.esc(data.get('video_url'))}\n"
+                       f"It is private. The first copy is the one waiting for "
+                       f"your decision; delete this one on YouTube.", html=True)
+        elif data.get("video_url"):
             # every uploaded format (short + long) so ✅/❌ act on all
             urls = data.get("video_urls") or [data.get("video_url")]
             state.STATE["pending_videos"][approval_id] = {

@@ -63,18 +63,49 @@ def _post(method, payload, timeout=15):
     return r, ok
 
 
+def _chunks(text, limit=4000):
+    """Split for Telegram's 4096 cap, preferring a line break.
+
+    A blind cut every 4000 characters can land inside a tag, or between a
+    <b> and its close — Telegram rejects a chunk whose HTML it can't parse,
+    so that part of the message simply never arrived.
+    """
+    out = []
+    while len(text) > limit:
+        cut = text.rfind("\n", 0, limit)
+        if cut < limit // 2:  # no usable break in range — hard cut
+            cut = limit
+        out.append(text[:cut])
+        text = text[cut:].lstrip("\n")
+    if text:
+        out.append(text)
+    return out
+
+
+def _plain(s):
+    """Same text with the markup taken out, for the no-parse_mode retry."""
+    return _html.unescape(re.sub(r"</?[a-zA-Z][^>]{0,80}>", "", s))
+
+
 def send(text, chat_id=None, html=False):
     """Send a message, split at Telegram's 4096-char cap."""
     chat_id = chat_id or config.OWNER_CHAT_ID
     if not chat_id or not text:
         return False
     ok_all = True
-    for i in range(0, len(text), 4000):
-        payload = {"chat_id": chat_id, "text": text[i:i + 4000]}
+    for chunk in _chunks(str(text)):
+        payload = {"chat_id": chat_id, "text": chunk}
         if html:
             payload["parse_mode"] = "HTML"
         try:
             _, ok = _post("sendMessage", payload)
+            if not ok and html:
+                # Telegram refused the HTML — a tag split across chunks, or
+                # markup a model invented. The words matter more than the
+                # bold, so send the same chunk again as plain text instead
+                # of letting it vanish.
+                _, ok = _post("sendMessage", {"chat_id": chat_id,
+                                              "text": _plain(chunk)})
             ok_all = ok_all and ok
         except Exception as e:
             print("[telegram] send failed:", e)
@@ -95,11 +126,32 @@ def send_buttons(text, buttons, chat_id=None):
         [{"text": label, "callback_data": cb} for label, cb in row]
         for row in buttons
     ]}
+    # The buttons ride on this one message, so it cannot be split — a message
+    # over the 4096 cap is rejected outright and the owner is left with no
+    # ✅/❌ at all. Trim instead, and say that it was trimmed.
+    if len(text) > 4000:
+        text = text[:3900].rstrip() + "\n…(trimmed)"
+    # The buttons ride on this one message, so it cannot be split — a message
+    # over the 4096 cap is rejected outright and the owner is left with no
+    # ✅/❌ at all. Trim instead, and say that it was trimmed.
+    if len(text) > 4000:
+        text = text[:3900]
+        if text.rfind("<") > text.rfind(">"):  # sliced inside a tag
+            text = text[:text.rfind("<")]
+        text = text.rstrip() + "\n…(trimmed)"
     try:
         _, ok = _post("sendMessage", {
             "chat_id": chat_id, "text": text,
             "parse_mode": "HTML", "reply_markup": kb,
         })
+        if not ok:
+            # HTML Telegram won't parse (an unclosed tag left by the trim,
+            # or markup a model invented) must not cost the owner the
+            # buttons — resend the same text plain, with the keyboard.
+            _, ok = _post("sendMessage", {
+                "chat_id": chat_id, "text": _plain(text),
+                "reply_markup": kb,
+            })
         return ok
     except Exception as e:
         print("[telegram] send_buttons failed:", e)

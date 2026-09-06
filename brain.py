@@ -278,7 +278,11 @@ def daily_report():
 
     today = (datetime.now() + config.BD_OFFSET).strftime("%Y-%m-%d")
     history = state.STATE.setdefault("stats_history", [])
-    yesterday = next((h for h in history if h.get("date") != today),
+    # newest close BEFORE today — iterating history forwards picked its
+    # oldest row instead, so the report's "+N" was growth since tracking
+    # began, not since yesterday. Same family as the panel's Desk delta.
+    yesterday = next((h for h in reversed(history)
+                      if h.get("date") != today),
                      history[-1] if history else None)
     d_subs = ch["subs"] - yesterday["subs"] if yesterday else 0
     d_views = ch["views"] - yesterday["views"] if yesterday else 0

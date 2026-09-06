@@ -10,6 +10,7 @@ Job shapes (all have: id, type, status, created, updated):
 import time
 import uuid
 
+import comms
 import state
 
 
@@ -44,11 +45,26 @@ def _cost_minutes(job):
     return duration_min * 13 + 3  # +3 for TTS/downloads/warmup
 
 
+def _claim_ttl(job):
+    """Seconds a claim may go quiet before its worker is presumed dead.
+
+    A flat 40 minutes was shorter than a real render. _cost_minutes puts a
+    long-form video at 100+ worker-minutes, and the worker doesn't poll while
+    it renders, so the brain handed a job back to the queue that a runner was
+    still working on: a second runner claimed it, rendered the same script,
+    and uploaded the same video again — leaving the first upload private,
+    orphaned and invisible. Twice the estimate gives honest headroom, floored
+    at the old 40 minutes for tiny jobs and capped just past the workflow's
+    own 330-minute ceiling, past which no runner can still be alive.
+    """
+    return min(max(2400, _cost_minutes(job) * 120), 6 * 3600)
+
+
 def next_job(max_cost_minutes=None):
     """Claim the oldest pending job the caller can afford. Re-syncs the
     queue from the gist first (source of truth), so a job queued by any
-    thread or process is always visible. A job claimed but not reported
-    on for 40 minutes goes back to pending (worker crashed)."""
+    thread or process is always visible. A claim that goes quiet for longer
+    than the render could plausibly take goes back to pending."""
     state.reload_jobs()
     now = time.time()
     # One write for the whole sweep: save_now() is a gist PATCH under a lock
@@ -56,10 +72,13 @@ def next_job(max_cost_minutes=None):
     # several stale claims wait through that many sequential round trips.
     stale = False
     for job in state.STATE["jobs"]:
-        if job["status"] == "claimed" and now - job["updated"] > 2400:
+        quiet = now - job["updated"]
+        if job["status"] == "claimed" and quiet > _claim_ttl(job):
             job["status"] = "pending"
             job["updated"] = now
             stale = True
+            comms.log(f"job {job['id']} reclaimed after "
+                      f"{int(quiet / 60)} min quiet — worker presumed dead")
     if stale:
         state.save_now()
     for job in state.STATE["jobs"]:

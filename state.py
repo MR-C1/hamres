@@ -10,6 +10,7 @@ STATE shape:
   "topic_direction": "latest Gemini guidance for script generation",
   "used_topics": [...],
   "pending_videos": { uuid: {title, paths, meta, job_id} },
+  "early_decisions": { approval_id: "approved"|"rejected" },  # tapped early
   "pending_replies": { uuid: {comment_id, draft, video_title} },
   "pending_titles":  { uuid: {video_id, title, current} },
   "replied_comments": [...],
@@ -95,12 +96,44 @@ def load():
     print("[state] load failed after retries — memory-only, saves disabled")
 
 
+def _merge_jobs(local, remote):
+    """Pure merge of the local job list with the gist's copy.
+
+    Kept separate (and pure) so selftest_jobs.py can prove the rules
+    without a network: local wins on content, a job the gist has not seen
+    yet survives, duplicate ids collapse, order is by creation time, and
+    the result stays bounded like add_job leaves it.
+    """
+    local_by_id = {j.get("id"): j for j in local}
+    merged, seen = [], set()
+    for job in remote:
+        jid = job.get("id")
+        if jid in seen:
+            continue
+        seen.add(jid)
+        merged.append(local_by_id.get(jid, job))
+    for job in local:
+        if job.get("id") not in seen:
+            seen.add(job.get("id"))
+            merged.append(job)
+    merged.sort(key=lambda j: j.get("created") or 0)
+    return merged[-100:]
+
+
 def reload_jobs():
     """Pull just the jobs list fresh from the gist, then MERGE into the
     local list rather than replacing it — replacing could discard a job
     that another thread appended between our read and the assignment.
-    The gist copy wins for jobs we don't have locally (same id); local
-    wins for anything the gist can't know about yet."""
+
+    Local wins on content for any job both copies know: statuses are
+    decided in THIS process (next_job claims, complete_job finishes) and
+    the gist is only where they are persisted, so the local copy is never
+    the stale one. A job the gist has not seen yet is KEPT, not dropped:
+    add_job appends and then writes, and the write can take seconds, so a
+    worker polling in that window used to rebuild the list from the gist
+    alone and lose the job that had just been queued — permanently, since
+    the next save wrote the shortened list back.
+    """
     global _gist_id
     if not config.GIST_TOKEN or not LOADED:
         return
@@ -117,11 +150,7 @@ def reload_jobs():
         content = r.json()["files"][GIST_FILE].get("content") or "{}"
         remote = json.loads(content).get("jobs", [])
         with _save_lock:
-            local_by_id = {j.get("id"): j for j in STATE["jobs"]}
-            for job in remote:
-                local_by_id.setdefault(job.get("id"), job)
-            STATE["jobs"] = [local_by_id[j.get("id")] for j in remote
-                             if j.get("id") in local_by_id]
+            STATE["jobs"] = _merge_jobs(STATE["jobs"], remote)
     except Exception as e:
         print("[state] reload_jobs failed:", e)
 
@@ -204,6 +233,7 @@ def default_state():
     STATE.setdefault("topic_direction", "")
     STATE.setdefault("used_topics", [])
     STATE.setdefault("pending_videos", {})
+    STATE.setdefault("early_decisions", {})
     STATE.setdefault("pending_replies", {})
     STATE.setdefault("pending_titles", {})
     STATE.setdefault("replied_comments", [])

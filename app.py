@@ -9,7 +9,7 @@ brain.py; YouTube access in yt.py; jobs in jobs.py.
 import re
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
 from flask import Flask, jsonify, request
@@ -1958,11 +1958,22 @@ def api_state():
     ch = snap["ch"]
     vids = snap["vids"]
     hist = state.STATE.get("stats_history", [])
-    today = None
+    # "+N today" on the Desk tiles has to actually mean today. stats_history
+    # gets one row per day, written when daily_report() runs, so diffing the
+    # last two rows measured YESTERDAY's growth for the whole stretch before
+    # that report landed — under a subscriber count read live from YouTube,
+    # so the tile contradicted itself most of the day. Today's movement is
+    # the live figure minus yesterday's close, and it has to be yesterday
+    # exactly: if the report missed a day the newest close is older than
+    # that and the difference spans several days, so there is no honest
+    # figure and the tile shows none (deltaSub() skips a missing value).
+    yday_bd = f"{datetime.now() + config.BD_OFFSET - timedelta(days=1):%Y-%m-%d}"
+    base = next((h for h in reversed(hist)
+                 if str(h.get("date", "")) == yday_bd), None)
     delta = {}
-    if len(hist) >= 2:
-        delta = {"subs": hist[-1]["subs"] - hist[-2]["subs"],
-                 "views": hist[-1]["views"] - hist[-2]["views"]}
+    if base and ch:
+        delta = {"subs": ch.get("subs", 0) - base.get("subs", 0),
+                 "views": ch.get("views", 0) - base.get("views", 0)}
     jobs_list = state.STATE.get("jobs", [])
     now = _t.time()
     s = state.STATE["settings"]
@@ -2415,7 +2426,13 @@ def report():
                 "job_id": job_id,
             }
             state.save_soon()
-            if state.STATE["settings"].get("auto_approve"):
+            # a ✅/❌ tapped on the preview before this report arrived
+            early = state.STATE.setdefault("early_decisions", {}).pop(
+                approval_id, None)
+            if early:
+                state.save_soon()
+                _record_decision(approval_id, early)
+            elif state.STATE["settings"].get("auto_approve"):
                 _publish_now(approval_id, note="auto-approved")
         elif job is None:
             comms.send(f"⚠️ <b>Render reported for an unknown job</b> "
@@ -2433,6 +2450,15 @@ def report():
     elif not ok:
         comms.send(f"⚠️ <b>Job failed</b> (<code>{comms.esc(job['type'])}</code>)\n"
                    f"{comms.esc(data.get('msg', ''))[:400]}", html=True)
+    if not (is_render and ok and data.get("video_url")):
+        # No approval entry was registered — the job failed, or it rendered
+        # but the upload didn't land. Either way a decision tapped ahead of
+        # it is waiting for a video that will never arrive.
+        stale = (job or {}).get("approval_id") or job_id
+        if state.STATE.setdefault("early_decisions", {}).pop(stale, None):
+            state.save_soon()
+            comms.send("↩️ The video you decided on early never made it to "
+                       "YouTube, so that decision is dropped.", html=True)
     return jsonify({"ok": True})
 
 
@@ -2480,6 +2506,18 @@ def _delete_pending(approval_id):
     return True
 
 
+def _job_in_flight(approval_id):
+    """Is a render that will claim this approval id still running?
+
+    The approval id is the job's own id unless the job carried one (see
+    the worker's `job.get("approval_id", job["id"])`), so match either.
+    """
+    for j in state.STATE.get("jobs", []):
+        if (j.get("approval_id") or j.get("id")) == approval_id:
+            return j.get("status") in ("pending", "claimed")
+    return False
+
+
 def _record_decision(approval_id, decision):
     """Owner's ✅ = flip the already-uploaded video public; ❌ = delete
     it from YouTube. No time window — the video is safely private on
@@ -2490,6 +2528,22 @@ def _record_decision(approval_id, decision):
     """
     p = state.STATE["pending_videos"].get(approval_id)
     if not p:
+        # The worker attaches the ✅/❌ buttons to the Telegram preview and
+        # only reports to /report afterwards — and sending the long-form
+        # preview in between takes tens of seconds. A tap inside that window
+        # used to be answered "isn't pending anymore", which was false and
+        # threw the decision away. While the render is still in flight,
+        # remember what was asked and let /report carry it out on arrival.
+        if _job_in_flight(approval_id):
+            ed = state.STATE.setdefault("early_decisions", {})
+            ed[approval_id] = decision
+            for old in list(ed)[:-20]:  # bounded, like every other list here
+                del ed[old]
+            state.save_soon()
+            comms.send("⏳ Noted — the render is still finishing. I'll "
+                       + ("publish" if decision == "approved" else "delete")
+                       + " it the moment it lands.", html=True)
+            return False
         # entry is gone: either already decided (popped on publish) or
         # the state was lost. Honest reply either way.
         comms.send("🤷 That video isn't pending anymore — it was already "
@@ -2969,6 +3023,23 @@ def scheduler_loop():
             threading.Thread(target=run_safely, args=(name, fn),
                              daemon=True).start()
 
+    def top_up_queue():
+        """Queue a video for the day, but only if the pipeline is empty.
+
+        Anything already moving counts as fed: a job still pending, one a
+        runner has claimed, and a finished video waiting in the approval
+        mailbox. Counting only 'pending' meant a render stuck in 'claimed',
+        or a stack of videos waiting for approval, still read as an empty
+        queue — so the top-up piled another video on top every morning.
+        """
+        jl = state.STATE.get("jobs", [])
+        busy = (sum(1 for j in jl if j.get("status") in ("pending", "claimed"))
+                + len(state.STATE.get("pending_videos", {})))
+        if busy:
+            comms.log(f"queue top-up skipped — {busy} already in the pipeline")
+            return
+        brain.queue_next_video(1)
+
     while True:
         now = datetime.now() + config.BD_OFFSET
         state.default_state()  # self-heal if a restart lost keys
@@ -2979,14 +3050,10 @@ def scheduler_loop():
             if now.weekday() == 6:
                 once_per_day("weekly summary", brain.weekly_summary, 9, 0)
             every_hours("comment sweep", brain.comment_sweep, 4)
-
-            # keep the render queue fed: if nothing pending, plan one video
-            if (now.hour == 9 and now.minute == 0
-                    and jobs.pending_count() == 0):
-                threading.Thread(target=run_safely,
-                                 args=("queue top-up",
-                                       lambda: brain.queue_next_video(1)),
-                                 daemon=True).start()
+            # Through once_per_day, not a bare "is it 09:00?": the free dyno
+            # restarts often, and a restart across that one minute used to
+            # skip the day's video silently. Now a late boot still catches up.
+            once_per_day("queue top-up", top_up_queue, 9, 0)
 
         # worker offline watchdog — cloud-only mode: runners poll only
         # when jobs exist (wake-on-queue + 3 crons), so quiet gaps are

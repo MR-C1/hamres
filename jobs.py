@@ -51,11 +51,17 @@ def next_job(max_cost_minutes=None):
     on for 40 minutes goes back to pending (worker crashed)."""
     state.reload_jobs()
     now = time.time()
+    # One write for the whole sweep: save_now() is a gist PATCH under a lock
+    # and this runs on a worker poll, so saving per job made a poll that found
+    # several stale claims wait through that many sequential round trips.
+    stale = False
     for job in state.STATE["jobs"]:
         if job["status"] == "claimed" and now - job["updated"] > 2400:
             job["status"] = "pending"
             job["updated"] = now
-            state.save_now()
+            stale = True
+    if stale:
+        state.save_now()
     for job in state.STATE["jobs"]:
         if job["status"] != "pending":
             continue

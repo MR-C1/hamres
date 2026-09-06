@@ -112,9 +112,15 @@ def clear_queue():
     before = len(state.STATE["jobs"])
     only_failed = request.args.get("jobs") == "failed"
     if only_failed:
-        state.STATE["jobs"] = [j for j in state.STATE["jobs"]
-                               if j.get("status") != "failed"]
+        keep = [j for j in state.STATE["jobs"]
+                if j.get("status") != "failed"]
+        # tombstone the removed ids, or the pre-save merge would resurrect
+        # them from the gist's copy on the next write
+        state.tombstone_jobs(j["id"] for j in state.STATE["jobs"]
+                             if j.get("status") == "failed")
+        state.STATE["jobs"] = keep
     else:
+        state.tombstone_jobs(j["id"] for j in state.STATE["jobs"])
         state.STATE["jobs"] = []
     if request.args.get("all") == "1":
         state.STATE["pending_videos"] = {}

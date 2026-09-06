@@ -24,7 +24,12 @@ def add_job(jtype, payload):
     }
     job.update(payload)
     state.STATE["jobs"].append(job)
-    del state.STATE["jobs"][:-100]  # keep the list bounded
+    dropped = state.STATE["jobs"][:-100]  # keep the list bounded
+    del state.STATE["jobs"][:-100]
+    if dropped:
+        # tombstone, or the pre-save merge would resurrect them from the
+        # gist's copy on the very next write
+        state.tombstone_jobs(j["id"] for j in dropped)
     state.save_now()  # immediate write — a crash can never lose a job
     return job
 
@@ -113,9 +118,13 @@ def pending_count():
 def prune_done():
     """Drop done/failed jobs older than a day."""
     now = time.time()
-    before = len(state.STATE["jobs"])
-    state.STATE["jobs"] = [j for j in state.STATE["jobs"]
-                           if j["status"] in ("pending", "claimed")
-                           or now - j["updated"] < 86400]
-    if len(state.STATE["jobs"]) != before:
+    keep, drop = [], []
+    for j in state.STATE["jobs"]:
+        fresh = (j["status"] in ("pending", "claimed")
+                 or now - j.get("updated", 0) < 86400)
+        (keep if fresh else drop).append(j)
+    if drop:
+        state.STATE["jobs"] = keep
+        # tombstone, or the pre-save merge would resurrect them
+        state.tombstone_jobs(j["id"] for j in drop)
         state.save_soon()

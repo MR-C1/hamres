@@ -1,18 +1,23 @@
 """Check the job-list merge without touching the network.
 
 state.reload_jobs() pulls the gist's copy of the queue and folds it into
-the one in memory. Getting that merge wrong loses renders: the old rule
-rebuilt the list from the gist alone, so a job queued seconds earlier —
-appended locally, still mid-write — disappeared, and the next save wrote
-the shortened list back over it.
+the one in memory, and save_now() does the same fold just before every
+write (_absorb_remote). Getting the merge wrong loses renders two ways:
+the old rule rebuilt the list from the gist alone, so a job queued
+seconds earlier — appended locally, still mid-write — disappeared; and
+during a Render deploy overlap the new dyno's stale copy reverted a
+claim the draining dyno had already written, so a second runner
+re-rendered the same script and the finished render's report was eaten.
 
-_merge_jobs is pure, and state.py imports only requests + stdlib at module
-level, so this runs in milliseconds:
+_merge_jobs is pure and state.py imports nothing heavy at module level,
+so this runs in milliseconds:
 
     python selftest_jobs.py
 """
 import sys
+import time
 
+import state
 from state import _merge_jobs
 
 
@@ -85,6 +90,52 @@ def main():
           ids(_merge_jobs([{"id": "old", "status": "pending"}],
                           [job("b", created=5)])),
           ["old", "b"])
+
+    # ---- newest-stamp-wins: the deploy-overlap rules ----
+    # every status transition re-stamps `updated`, so the newest stamp is
+    # the latest truth whichever process wrote it
+
+    # the incident: a new dyno booted mid-render holding the pre-claim
+    # copy while the draining dyno had already written 'claimed' to the gist
+    check("a claim made during a deploy overlap survives",
+          _merge_jobs([job("a", "pending", created=1, updated=100)],
+                      [job("a", "claimed", created=1, updated=200)])[0]["status"],
+          "claimed")
+
+    # the flip side: this process's own newer transition beats the gist's
+    check("a newer local transition beats the gist's",
+          _merge_jobs([job("a", "done", created=1, updated=300)],
+                      [job("a", "claimed", created=1, updated=200)])[0]["status"],
+          "done")
+
+    # /retry requeues by writing a newer pending stamp — must survive too
+    check("a requeued job stays pending over a stale claim",
+          _merge_jobs([job("a", "pending", created=1, updated=400)],
+                      [job("a", "claimed", created=1, updated=200)])[0]["status"],
+          "pending")
+
+    # ---- tombstones: deliberate deletions stay deleted ----
+
+    # clear-queue/prune remove jobs the gist still holds copies of; without
+    # the marker the pre-save merge would resurrect them on the next write
+    check("a tombstoned job stays deleted on both sides",
+          ids(_merge_jobs([job("b", created=2)],
+                          [job("a", created=1), job("b", created=2)],
+                          tombstones={"a": time.time()})),
+          ["b"])
+    check("tombstones can wipe the whole queue",
+          _merge_jobs([job("a", created=1)], [job("a", created=1)],
+                      tombstones={"a": time.time()}),
+          [])
+
+    # tombstone_jobs itself: expired markers prune, fresh ones stick
+    now = time.time()
+    state.STATE.clear()
+    state.STATE["job_tombstones"] = {"old": now - 7200, "stale": now - 3660}
+    state.tombstone_jobs(["fresh"])
+    check("tombstone expiry prunes the stale and keeps the fresh",
+          sorted(state.STATE["job_tombstones"]), ["fresh"])
+    state.STATE.clear()
 
     print()
     if fails:

@@ -144,9 +144,18 @@ def do_render(job):
         "msg": up.get("msg", "rendered"),
     }
     if not up.get("video_url"):
-        # upload failed (e.g. dead token) — keep files for a retry and say so
-        result["msg"] = (f"rendered but upload FAILED: {up.get('msg', '?')} "
-                         f"— files kept locally for retry")
+        # upload failed (dead token, YouTube's daily upload cap, ...). The
+        # render itself is done and paid for, and the duplicate-upload
+        # guard (same title + duration bucket) makes a re-render safe.
+        # Cloud runners are ephemeral, so say what actually happens next
+        # instead of promising a local retry that cannot happen.
+        m = str(up.get("msg", "?"))
+        if "exceeded" in m.lower() or "quota" in m.lower():
+            hint = (" — YouTube's daily upload cap; this script needs a "
+                    "re-render after the quota resets to upload")
+        else:
+            hint = " — this script needs a re-render to retry the upload"
+        result["msg"] = f"rendered but upload FAILED: {m}{hint}"
     return result
 
 
@@ -250,7 +259,10 @@ def _cleanup_files(sid):
     for pattern in (f"{sid}_short.mp4", f"{sid}_long.mp4",
                     f"{sid}_metadata.txt", f"{sid}_thumb.png",
                     f"{sid}_shortTEMP_MPY_wvf_snd.*",
-                    f"{sid}_longTEMP_MPY_wvf_snd.*"):
+                    f"{sid}_longTEMP_MPY_wvf_snd.*",
+                    # per-block intermediates from the segmented renderer
+                    f"{sid}_short_*.mp4", f"{sid}_long_*.mp4",
+                    f"{sid}_*.blocks.txt"):
         for p in REVIEW.glob(pattern):
             try:
                 p.unlink()

@@ -310,7 +310,7 @@ def shot_order(sources):
 
 
 def montage(sources, duration, w, h, label="", motion=True, shot=3.0,
-            used=None):
+            used=None, readers=None):
     """Cut ONE narration block into several shots instead of one long take.
 
     sources: ordered [(kind, path)] where kind is "video" or "still".
@@ -334,7 +334,12 @@ def montage(sources, duration, w, h, label="", motion=True, shot=3.0,
     # more than the block for the concatenation to still fill it exactly
     need = duration + 0.25 * (n - 1)
     order = shot_order(sources)
-    keep, shots, filled, tries = [], [], 0.0, 0
+    # readers (opened VideoFileClips) collect into the CALLER's list when
+    # given: per-block rendering closes them after the block is written —
+    # a VideoFileClip left open holds an ffmpeg process (and its buffers)
+    # alive for the rest of the render
+    keep = readers if readers is not None else []
+    shots, filled, tries = [], 0.0, 0
     while filled < need - 0.05 and tries < 3 * n:
         tries += 1
         left = max(1, n - len(shots))
@@ -361,6 +366,66 @@ def montage(sources, duration, w, h, label="", motion=True, shot=3.0,
     faded = [shots[0]] + [s.with_effects([CrossFadeIn(0.25)])
                           for s in shots[1:]]
     return concatenate_videoclips(faded, method="compose", padding=-0.25)
+
+
+def _release(clips):
+    """Close a block's whole object graph and force a GC pass. The
+    per-block architecture only pays off if RSS actually returns to
+    baseline between blocks — a leaked VideoFileClip keeps its ffmpeg
+    reader process (and its decode buffers) alive for the rest of the
+    render, and enough of those is what OOM-killed the Actions runner."""
+    import gc
+    for c in clips:
+        try:
+            c.close()
+        except Exception:
+            pass
+    gc.collect()
+
+
+def _silence(duration, fps=44100):
+    """A silent AudioClip — the end-card block needs an audio stream or
+    the concat (stream copy) would see mixed audio/no-audio inputs."""
+    from moviepy import AudioClip
+    return AudioClip(lambda t: [0.0], duration=duration, fps=fps)
+
+
+def _mark_layer(w, h, fmt, duration):
+    """Corner brand mark on every frame: top-right on Shorts (captions
+    + UI occupy the bottom), bottom-right on long-form."""
+    mark = (ImageClip(str(_asterisk_mark(int(w * 0.045))))
+            .with_start(0).with_duration(duration))
+    return mark.with_position((w - int(w * 0.045) - int(w * 0.025),
+                               int(h * 0.03) if fmt == "short"
+                               else h - int(w * 0.045) - int(h * 0.04)))
+
+
+def _concat(blocks, dest):
+    """Join per-block files into one video. Stream copy first — the
+    blocks all come from the same writer with the same parameters, so it
+    is lossless and takes seconds — with a re-encode fallback for any
+    container-level disagreement. Returns True only when the result
+    fully decodes (a concat that silently drops half the blocks is worse
+    than a failure the caller can raise on)."""
+    import subprocess
+    import imageio_ffmpeg
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    lst = dest.with_suffix(".blocks.txt")
+    lst.write_text("".join(f"file '{p.as_posix()}'\n" for p in blocks),
+                   encoding="utf-8")
+    for args in (["-c", "copy"],
+                 ["-c:v", "libx264", "-preset", "medium", "-crf", "20",
+                  "-c:a", "aac", "-b:a", "192k"]):
+        r = subprocess.run(
+            [ffmpeg, "-y", "-v", "error", "-f", "concat", "-safe", "0",
+             "-i", str(lst), *args, str(dest)],
+            capture_output=True, text=True, timeout=7200)
+        if r.returncode == 0 and _render_valid(dest):
+            lst.unlink(missing_ok=True)
+            return True
+        log.warning("concat %s failed: %s", args[1], (r.stderr or "")[-300:])
+    lst.unlink(missing_ok=True)
+    return False
 
 
 def pick_scenes(script, fmt, audio_durations):
@@ -473,7 +538,11 @@ def render_from_dict(script, config):
                 f"{sid}_shortscene{idx}", sn,
                 vconf["long"], vconf.get("rate", "+0%"))
 
-    durations = {k: AudioFileClip(str(mp3)).duration for k, (mp3, _) in audio.items()}
+    durations = {}
+    for k, (mp3, _) in audio.items():
+        a = AudioFileClip(str(mp3))
+        durations[k] = a.duration
+        a.close()  # reader process — never leave it parked for the render
 
     outputs = []
     credits = []      # archival attributions for the description
@@ -494,8 +563,6 @@ def render_from_dict(script, config):
             log.info("resume: %s already rendered — skipping", out_path.name)
             outputs.append(out_path)
             continue
-        total = sum(durations[bid] for bid, _ in blocks)
-
         # 2) stock clips per unique keyword (both orientations cached)
         keyword_clips = {}
         for _, s in blocks:
@@ -505,12 +572,25 @@ def render_from_dict(script, config):
                         kw, "portrait" if fmt == "short" else "landscape",
                         keys, max_clips)
 
-        # 3) assemble visual + audio + captions
-        video_layers, audio_clips = [], []
-        t = 0.0
+        # 3) PER-BLOCK assembly + render. The old code built ONE
+        # CompositeVideoClip for the whole video: every caption ImageClip
+        # (hundreds of full-frame RGBA buffers) and every stock-video
+        # reader stayed open until the final write — that graph
+        # OOM-killed the 16GB Actions runner mid-assembly four runs in a
+        # row (exit 137, "runner has received a shutdown signal"). Each
+        # block now renders to its own file and its whole object graph is
+        # closed before the next block starts: peak memory is one block's
+        # worth, a crash resumes at the failed block, and the block files
+        # concat losslessly at the end.
+        block_paths = []
         used_clips = set()   # clip filenames already shown in THIS video
-        scene_no = 0
-        for bid, s in blocks:
+        for bi, (bid, s) in enumerate(blocks):
+            bpath = REVIEW / f"{sid}_{fmt}_{bi:02d}_{bid}.mp4"
+            block_paths.append(bpath)
+            if _render_valid(bpath):
+                log.info("resume: block %s already rendered — skipping",
+                         bpath.name)
+                continue
             mp3, words_path = audio[bid]
             d = durations[bid] + 0.35  # small pause between blocks
             kws = s.get("visual_keywords", [])
@@ -555,15 +635,15 @@ def render_from_dict(script, config):
             fresh = [c for c in clips if c.name not in used_clips]
             stale = [c for c in clips if c.name in used_clips]
             ordered = fresh + stale
-            if ordered and scene_no:
-                rot = scene_no % len(ordered)
+            if ordered and bi:
+                rot = bi % len(ordered)
                 ordered = ordered[rot:] + ordered[:rot]
 
             if sources:
                 # start each block at a different point in its own pool so
                 # consecutive blocks don't open on the same photograph
-                sources = (sources[scene_no % len(sources):]
-                           + sources[:scene_no % len(sources)])
+                sources = (sources[bi % len(sources):]
+                           + sources[:bi % len(sources)])
                 if len(sources) < 2 and ordered:
                     # one lonely photo can only carry two moves; let stock
                     # take the connective moments so the block still cuts
@@ -576,80 +656,91 @@ def render_from_dict(script, config):
             # ONE BLOCK, SEVERAL SHOTS: this used to hand the whole block
             # to a single subclip or a single still, which is why a Short
             # arrived as one clip plus one photo
-            shown = []
+            shown, readers = [], []
             visual = montage(sources, d, w, h,
                              label=kws[0] if kws else "",
                              motion=(fmt == "short"),
                              shot=2.6 if fmt == "short" else 3.4,
-                             used=shown)
+                             used=shown, readers=readers)
             for p in shown:
                 if p in by_path and by_path[p] not in credits:
                     credits.append(by_path[p])
-            video_layers.append(visual.with_start(t).with_duration(d))
-            audio_clips.append(AudioFileClip(str(mp3)).with_start(t + 0.1))
-            scene_no += 1
+            layers = [visual]
 
-            # captions
+            # captions — times are block-relative (identical to the old
+            # global construction, where audio led each caption by 0.1s)
             words = json.loads(words_path.read_text(encoding="utf-8"))
             cap_imgs = render_caption_images(
                 f"{sid}_{bid}", words, w, h,
                 rconf.get("caption_max_words", 3))
             for cs, ce, png in cap_imgs:
                 img = (ImageClip(str(png))
-                       .with_start(t + cs).with_duration(max(ce - cs, 0.15))
+                       .with_start(cs).with_duration(max(ce - cs, 0.15))
                        .with_position(("center", h * 0.66)))
-                video_layers.append(img)
+                layers.append(img)
 
             # source card: on-screen citation for the scene's anchor fact
             src = (s.get("source") or "").strip()
             if src:
                 card = _source_card(src[:80], w)
-                cw = ImageClip(str(card)).with_start(t + 0.4).with_duration(
+                cw = ImageClip(str(card)).with_start(0.4).with_duration(
                     min(4.0, d - 0.5))
                 cw = cw.with_position((int(w * 0.03), int(h * 0.86)))
-                video_layers.append(cw)
-            t += d
+                layers.append(cw)
+            layers.append(_mark_layer(w, h, fmt, d))
 
-        # end card (long-form only — Shorts loop instead)
+            # write THIS block, then free everything it allocated before
+            # the next one starts from a clean slate — this is the fix:
+            # the old single composite kept every caption layer and every
+            # stock-video reader open until the final write
+            narr = AudioFileClip(str(mp3)).with_start(0.1)
+            block_audio = CompositeAudioClip([narr])
+            music = music_track(d, rconf.get("music_volume", 0.08))
+            if music:
+                block_audio = CompositeAudioClip([narr, music])
+            comp = (CompositeVideoClip(layers, size=(w, h))
+                    .with_audio(block_audio).with_duration(d))
+            log.info("rendering %s block %d/%d (%.1fs) -> %s", fmt, bi + 1,
+                     len(blocks), d, bpath.name)
+            comp.write_videofile(
+                str(bpath), codec="libx264", audio_codec="aac",
+                fps=rconf.get("fps", 30), preset="medium", threads=4,
+                temp_audiofile_path=str(REVIEW),  # temp audio next to output
+                logger=None)
+            _release(layers + [comp, narr, block_audio] + readers)
+
+        # end card as its own silent block (long-form only — Shorts loop
+        # instead). It needs an audio stream to keep the concat copyable.
         if fmt == "long":
-            ec = ImageClip(str(_end_card(w, h))).with_start(t).with_duration(12)
-            video_layers.append(ec)
-            t += 12
+            ec = REVIEW / f"{sid}_{fmt}_{len(blocks):02d}_endcard.mp4"
+            block_paths.append(ec)
+            if _render_valid(ec):
+                log.info("resume: end card already rendered — skipping")
+            else:
+                layers = [ImageClip(str(_end_card(w, h))).with_start(0)
+                          .with_duration(12),
+                          _mark_layer(w, h, fmt, 12)]
+                comp = (CompositeVideoClip(layers, size=(w, h))
+                        .with_audio(_silence(12)).with_duration(12))
+                log.info("rendering %s end card -> %s", fmt, ec.name)
+                comp.write_videofile(
+                    str(ec), codec="libx264", audio_codec="aac",
+                    fps=rconf.get("fps", 30), preset="medium", threads=4,
+                    temp_audiofile_path=str(REVIEW),
+                    logger=None)
+                _release(layers + [comp])
 
-        # corner brand mark on every frame: top-right on Shorts (captions
-        # + UI occupy the bottom), bottom-right on long-form
-        mark = ImageClip(str(_asterisk_mark(int(w * 0.045)))).with_start(0
-                    ).with_duration(t)
-        mark = mark.with_position((w - int(w * 0.045) - int(w * 0.025),
-                                   int(h * 0.03) if fmt == "short"
-                                   else h - int(w * 0.045) - int(h * 0.04)))
-        video_layers.append(mark)
-
-        final_audio = CompositeAudioClip(audio_clips)
-        music = music_track(t, rconf.get("music_volume", 0.08))
-        if music:
-            final_audio = CompositeAudioClip([final_audio, music])
-
-        final = (CompositeVideoClip(video_layers, size=(w, h))
-                 .with_audio(final_audio)
-                 .with_duration(t))
-
-        log.info("rendering %s (%.1fs) -> %s", fmt, t, out_path.name)
-        final.write_videofile(
-            str(out_path), codec="libx264", audio_codec="aac",
-            fps=rconf.get("fps", 30), preset="medium", threads=4,
-            temp_audiofile_path=str(REVIEW),  # temp audio next to output, not CWD
-            logger=None)
+        # 4) join the blocks — lossless stream copy, re-encode fallback
+        if not _concat(block_paths, out_path):
+            raise RuntimeError(
+                f"{fmt} concat failed for {sid} — blocks kept for resume")
+        log.info("concatenated %d blocks -> %s", len(block_paths),
+                 out_path.name)
         _loudnorm(out_path)  # YouTube's loudness target, audio-only pass
         outputs.append(out_path)
-
-        # free memory between formats
-        for layer in video_layers:
-            try:
-                layer.close()
-            except Exception:
-                pass
-        del video_layers, final
+        # the blocks are dead weight once the final exists
+        for p in block_paths:
+            p.unlink(missing_ok=True)
 
     # 4) metadata file for the uploader
     desc = script.get("description", script["hook"])

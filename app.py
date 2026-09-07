@@ -123,6 +123,7 @@ def clear_queue():
         state.tombstone_jobs(j["id"] for j in state.STATE["jobs"])
         state.STATE["jobs"] = []
     if request.args.get("all") == "1":
+        state.tombstone_decided(state.STATE["pending_videos"])
         state.STATE["pending_videos"] = {}
     state.save_now()
     comms.send(f"🧹 Queue cleared ({before} → "
@@ -151,6 +152,7 @@ def video_admin():
         removed = [i for i in ids
                    if state.STATE["pending_videos"].pop(i, None) is not None]
         if removed:
+            state.tombstone_decided(removed)
             state.save_soon()
         comms.send(f"🛠 <b>Video admin</b> forget: {len(removed)} stale "
                    f"entries removed.", html=True)
@@ -2199,12 +2201,16 @@ def api_action():
         return jsonify({"ok": True})
     if a == "clear_failed":
         state.reload_jobs()
+        state.tombstone_jobs(j["id"] for j in state.STATE["jobs"]
+                             if j.get("status") == "failed")
         state.STATE["jobs"] = [j for j in state.STATE["jobs"]
                                if j.get("status") != "failed"]
         state.save_now()
         return jsonify({"ok": True})
     if a == "clear_all":
         state.reload_jobs()
+        state.tombstone_jobs(j["id"] for j in state.STATE["jobs"])
+        state.tombstone_decided(state.STATE["pending_videos"])
         state.STATE["jobs"] = []
         state.STATE["pending_videos"] = {}
         state.save_now()
@@ -2496,6 +2502,7 @@ def _publish_now(approval_id, note=""):
                    f"Try again or flip it in YouTube Studio.", html=True)
         return False
     state.STATE["pending_videos"].pop(approval_id, None)
+    state.tombstone_decided([approval_id])
     state.save_soon()
     comms.send(f"🚀 <b>Published</b> — {comms.esc(p['title'][:60])}\n"
                f"{comms.esc(urls[0])}", html=True)
@@ -2513,6 +2520,7 @@ def _delete_pending(approval_id):
     try:
         for url in urls:
             yt.delete_video(url)
+        state.tombstone_decided([approval_id])
         comms.send(f"🗑 Deleted from YouTube — {comms.esc(p['title'][:60])}.",
                    html=True)
     except Exception as e:
@@ -2822,15 +2830,19 @@ def cmd_clear(args):
     arg = args.strip().lower()
     before = len(state.STATE["jobs"])
     if arg == "failed":
+        state.tombstone_jobs(j["id"] for j in state.STATE["jobs"]
+                             if j.get("status") == "failed")
         state.STATE["jobs"] = [j for j in state.STATE["jobs"]
                                if j.get("status") != "failed"]
         what = "failed jobs"
     else:
+        state.tombstone_jobs(j["id"] for j in state.STATE["jobs"])
         state.STATE["jobs"] = []
         what = "entire queue"
     note = ""
     if arg == "all":
         n = len(state.STATE["pending_videos"])
+        state.tombstone_decided(state.STATE["pending_videos"])
         state.STATE["pending_videos"] = {}
         note = (f" Dropped {n} pending approval{'s' if n != 1 else ''} "
                 f"(videos stay private on YouTube — publish or delete "

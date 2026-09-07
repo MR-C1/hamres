@@ -137,6 +137,46 @@ def main():
           sorted(state.STATE["job_tombstones"]), ["fresh"])
     state.STATE.clear()
 
+    # ---- pending approvals: the lost-approvals rules ----
+    # pending_videos merges per-entry now; the incident was a deploy
+    # overlap whose last-writer-wins write wiped three owner approvals
+    from state import _merge_pending, _merge_stats, DECIDED_EXPIRY
+
+    check("an approval only the gist knows survives the fold",
+          sorted(_merge_pending({"local": {}}, {"local": {}, "remote": {}})),
+          ["local", "remote"])
+    check("an approval only this dyno knows survives the fold",
+          sorted(_merge_pending({"mine": {}}, {})), ["mine"])
+    check("nothing on either side", _merge_pending({}, {}), {})
+    # a decided entry popped here must not resurrect from the gist's copy
+    check("a decided approval stays decided",
+          _merge_pending({"gone": {}}, {"gone": {}, "kept": {}},
+                         decided={"gone"}),
+          {"kept": {}})
+    check("early decisions merge the same way",
+          _merge_pending({"tapped": "approved"},
+                         {"tapped": "approved", "wait": "rejected"},
+                         decided={"tapped"}),
+          {"wait": "rejected"})
+
+    # tombstone_decided: expiry prunes, fresh stick
+    state.STATE.clear()
+    state.STATE["decided_videos"] = {"old": now - DECIDED_EXPIRY - 3600}
+    state.tombstone_decided(["fresh"])
+    check("decided tombstone expiry prunes and keeps",
+          sorted(state.STATE["decided_videos"]), ["fresh"])
+    state.STATE.clear()
+
+    # stats_history unions by date — a deploy overlap blanked it once
+    check("stats rows union by date",
+          [r["date"] for r in _merge_stats(
+              [{"date": "2026-09-05", "subs": 10}],
+              [{"date": "2026-09-04", "subs": 8},
+               {"date": "2026-09-05", "subs": 10}])],
+          ["2026-09-04", "2026-09-05"])
+    check("empty stats on either side",
+          _merge_stats([], [{"date": "d"}]), [{"date": "d"}])
+
     print()
     if fails:
         print(f"{len(fails)} FAILED: {', '.join(fails)}")

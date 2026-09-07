@@ -105,7 +105,7 @@ def complete_job(job_id, result):
             job["status"] = "done" if result.get("ok") else "failed"
             job["updated"] = time.time()
             job["result"] = {k: result.get(k) for k in
-                             ("msg", "video_url", "files")}
+                             ("msg", "video_url", "video_urls", "files")}
             state.save_now()
             return job
     return None

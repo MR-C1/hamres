@@ -160,6 +160,53 @@ def tombstone_jobs(ids):
     STATE["job_tombstones"] = ts
 
 
+DECIDED_EXPIRY = 86400  # decided-video tombstones live a day
+
+
+def tombstone_decided(ids):
+    """Mark approval ids as decided (published / deleted / forgotten).
+
+    pending_videos now merges per-entry (see _merge_pending), so a
+    decided entry popped on this dyno would otherwise be resurrected
+    from the gist's copy by the very next save — an owner would see a
+    published- or deleted-video's ✅/❌ buttons come back to life."""
+    now = time.time()
+    ts = {k: v for k, v in STATE.get("decided_videos", {}).items()
+          if now - v <= DECIDED_EXPIRY}
+    for aid in ids:
+        if aid:
+            ts[aid] = now
+    STATE["decided_videos"] = ts
+
+
+def _merge_pending(local, remote, decided=()):
+    """Union of both pending dicts minus decided ids.
+
+    The incident this fixes: a Render deploy overlap had the new dyno
+    save its stale top-level dict wholesale (last-writer-wins on the
+    whole key), wiping three owner approvals that only the draining
+    dyno's copy knew about. Union keeps whatever either side still
+    holds; the decided tombstones keep a decided entry from coming
+    back. Works for early_decisions too — same shape, same lifecycle."""
+    dead = set(decided)
+    out = {k: v for k, v in (local or {}).items() if k not in dead}
+    for k, v in (remote or {}).items():
+        if k not in dead and k not in out:
+            out[k] = v
+    return out
+
+
+def _merge_stats(local, remote):
+    """Union by date — stats_history is one row per day and a deploy
+    overlap used to blank it wholesale."""
+    out = {row.get("date"): row for row in (local or [])}
+    for row in remote or []:
+        d = row.get("date")
+        if d and d not in out:
+            out[d] = row
+    return [out[k] for k in sorted(out) if k]
+
+
 def reload_jobs():
     """Pull just the jobs list fresh from the gist, then MERGE into the
     local list rather than replacing it — replacing could discard a job
@@ -204,8 +251,8 @@ def _dump():
 
 
 def _absorb_remote(gist_id):
-    """Fold the gist's freshest jobs and worker check-in into STATE, just
-    before a dump.
+    """Fold the gist's freshest jobs, decisions and worker check-in into
+    STATE, just before a dump.
 
     Render deploys run the new dyno while the old one is still serving,
     and a claim or report the old dyno records in that window lives only
@@ -214,9 +261,11 @@ def _absorb_remote(gist_id):
     over the transition. This exact race reverted a mid-render claim to
     'pending' (a second runner re-rendered the same video) and ate a
     finished render's report. Jobs merge by newest stamp with tombstones
-    honored; `worker` goes to the gist's copy wholesale when its check-in
-    is newer, since that dict's only writer is whichever dyno the worker
-    last reached. A merge failure must never block the save itself.
+    honored; pending approvals and early decisions merge per-entry with
+    decided ids dropped; stats union by date. `worker` goes to the
+    gist's copy wholesale when its check-in is newer, since that dict's
+    only writer is whichever dyno the worker last reached. A merge
+    failure must never block the save itself.
     """
     try:
         r = requests.get(f"https://api.github.com/gists/{gist_id}",
@@ -226,6 +275,26 @@ def _absorb_remote(gist_id):
             r.json()["files"][GIST_FILE].get("content") or "{}")
         STATE["jobs"] = _merge_jobs(STATE["jobs"], remote.get("jobs", []),
                                     STATE.get("job_tombstones", {}))
+        # decided tombstones: fold the remote's (a decision recorded by
+        # the draining dyno), prune the expired, use them for the
+        # per-entry merges below
+        rd = remote.get("decided_videos") or {}
+        ld = dict(STATE.get("decided_videos") or {})
+        for k, v in rd.items():
+            if v > ld.get(k, 0):
+                ld[k] = v
+        now = time.time()
+        ld = {k: v for k, v in ld.items() if now - v <= DECIDED_EXPIRY}
+        STATE["decided_videos"] = ld
+        decided = set(ld)
+        STATE["pending_videos"] = _merge_pending(
+            STATE.get("pending_videos"),
+            remote.get("pending_videos"), decided)
+        STATE["early_decisions"] = _merge_pending(
+            STATE.get("early_decisions"),
+            remote.get("early_decisions"), decided)
+        STATE["stats_history"] = _merge_stats(
+            STATE.get("stats_history"), remote.get("stats_history"))
         rw, lw = remote.get("worker") or {}, STATE.get("worker") or {}
         if (str(rw.get("last_seen") or "")
                 > str(lw.get("last_seen") or "")):
@@ -305,6 +374,7 @@ def default_state():
     """Ensure every key exists — call once after load()."""
     STATE.setdefault("jobs", [])
     STATE.setdefault("job_tombstones", {})
+    STATE.setdefault("decided_videos", {})
     STATE.setdefault("stats_history", [])
     STATE.setdefault("topic_direction", "")
     STATE.setdefault("used_topics", [])

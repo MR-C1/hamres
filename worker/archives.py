@@ -22,20 +22,48 @@ from common import CACHE, setup_logging
 log = setup_logging("archives")
 
 ARCHIVES = CACHE / "archives"
-UA = {"User-Agent": "FOOTNOTE-channel-pipeline/1.0 (documentary research)"}
+# Wikimedia's UA policy requires a way to contact the operator; the repo
+# URL is it. The old UA had no contact info, which is part of why every
+# burst from the Actions runners got 429'd.
+UA = {"User-Agent": "FOOTNOTE-pipeline/1.2 "
+                    "(documentary research; https://github.com/MR-C1/hamres)"}
 
 # polite global pacing between ALL Commons requests (searches AND
 # downloads): a full render fires dozens of them and Wikimedia's
-# per-client burst limiter is strict
+# per-client burst limiter is strict — and GitHub Actions egress IPs are
+# shared by thousands of jobs, so they are throttled extra hard
 _last_commons_req = [0.0]
-COMMONS_MIN_INTERVAL = 1.0  # seconds between Commons hits
+COMMONS_MIN_INTERVAL = 2.0  # seconds between Commons hits, plus jitter
 
 
 def _commons_pace():
+    import random
     wait = COMMONS_MIN_INTERVAL - (time.monotonic() - _last_commons_req[0])
     if wait > 0:
-        time.sleep(wait)
+        time.sleep(wait + random.uniform(0, 0.6))
     _last_commons_req[0] = time.monotonic()
+
+
+def _commons_get(url, params=None, timeout=60, attempts=4):
+    """GET against Wikimedia with pacing and 429 backoff (Retry-After is
+    honored when sent). Shared by the API search and the file downloads —
+    upload.wikimedia.org throttles shared cloud IPs hardest of all, and
+    the old code's fixed 2-3s sleeps lost dozens of searches per render.
+    Returns the Response; raises on final failure."""
+    import random
+    for attempt in range(1, attempts + 1):
+        _commons_pace()
+        r = requests.get(url, params=params, headers=UA, timeout=timeout)
+        if r.status_code == 429:
+            try:
+                delay = float(r.headers.get("Retry-After", 0))
+            except ValueError:
+                delay = 0.0
+            time.sleep(max(delay, 2.0 * attempt) + random.uniform(0, 1.5))
+            continue
+        r.raise_for_status()
+        return r
+    raise RuntimeError(f"commons still rate-limited after {attempts} attempts")
 
 # licenses safe for monetized YouTube (everything on Commons is free,
 # but we record the exact license string for the credits block)
@@ -94,28 +122,22 @@ def search_commons(query, max_images=8, min_width=640):
     results = []
     try:
         # search with 429 backoff: a 10-scene script fires ~20 archive
-        # searches in quick succession and Wikimedia rate-limits bursts
-        # (the Bell Witch run lost most of its searches to this)
-        r = None
-        for attempt in (1, 2, 3):
-            _commons_pace()
-            r = requests.get(
-                "https://commons.wikimedia.org/w/api.php",
-                params={
-                    "action": "query", "format": "json",
-                    "generator": "search",
-                    "gsrsearch": f"filetype:bitmap {query}",
-                    "gsrnamespace": 6, "gsrlimit": max_images * 3,
-                    "prop": "imageinfo",
-                    "iiprop": "url|size|mime|extmetadata",
-                    "iiurlwidth": 1920,
-                },
-                headers=UA, timeout=30)
-            if r.status_code == 429:
-                time.sleep(2 * attempt)  # back off, then retry the search
-                continue
-            break
-        r.raise_for_status()
+        # searches and Wikimedia rate-limits shared cloud IPs hard
+        r = _commons_get(
+            "https://commons.wikimedia.org/w/api.php",
+            params={
+                "action": "query", "format": "json",
+                "generator": "search",
+                "gsrsearch": f"filetype:bitmap {query}",
+                "gsrnamespace": 6, "gsrlimit": max_images * 3,
+                "prop": "imageinfo",
+                "iiprop": "url|size|mime|extmetadata",
+                # 1280 is a standard pre-rendered thumb width (1920 made
+                # Wikimedia serve unscaled originals for narrow images —
+                # exactly what their rate-limit page asks scrapers not to
+                # do) and is still crisp on a 1080p canvas
+                "iiurlwidth": 1280,
+            }, timeout=30)
         pages = (r.json().get("query") or {}).get("pages") or {}
         # Collect every usable candidate FIRST, then download the most
         # relevant ones. The old code downloaded in raw search order, so a
@@ -155,23 +177,22 @@ def search_commons(query, max_images=8, min_width=640):
                 break
             dest = d / f"commons_{c['pageid']}.jpg"
             if not dest.exists():
-                for attempt in (1, 2):
-                    _commons_pace()
-                    rr = requests.get(c["url"], headers=UA, timeout=60)
-                    if rr.status_code == 429 and attempt == 1:
-                        time.sleep(3)  # wikimedia rate-limits bursts
+                try:
+                    rr = _commons_get(c["url"], timeout=60, attempts=3)
+                    if len(rr.content) < 20_000:  # tiny/decorative junk
                         continue
-                    rr.raise_for_status()
-                    break
-                if len(rr.content) < 20_000:  # tiny/decorative junk
+                    dest.write_bytes(rr.content)
+                except Exception as e:
+                    # one throttled or failed download must not abort the
+                    # whole query — the next candidate is usually fine
+                    log.warning("commons download failed (%s): %s",
+                                Path(c["url"]).name[:50], str(e)[:80])
                     continue
-                dest.write_bytes(rr.content)
             results.append({
                 "title": c["title"], "page": c["page"],
                 "license": c["license"], "author": c["author"],
                 "path": str(dest),
             })
-            time.sleep(0.3)  # be polite to the API
     except Exception as e:
         log.warning("commons search failed for '%s': %s", query, e)
 
@@ -286,11 +307,21 @@ def search_archive_video(query, max_clips=3):
                    + urllib.parse.quote(fname))
             dest = d / f"ia_{ident}_{Path(fname).stem}.mp4"
             if not dest.exists():
-                rr = requests.get(url, headers=UA, timeout=600)
-                rr.raise_for_status()
-                if len(rr.content) < 1 << 20:
+                # stream to disk — these files run 2-120MB and a
+                # whole-file requests.get parks the entire thing in RAM
+                # at once (a real OOM contributor on the 16GB runner)
+                tmp = dest.with_suffix(".part")
+                with requests.get(url, headers=UA, stream=True,
+                                  timeout=600) as rr:
+                    rr.raise_for_status()
+                    with open(tmp, "wb") as f:
+                        for chunk in rr.iter_content(chunk_size=1 << 20):
+                            f.write(chunk)
+                if tmp.stat().st_size >= 1 << 20:
+                    tmp.replace(dest)
+                else:
+                    tmp.unlink(missing_ok=True)
                     continue
-                dest.write_bytes(rr.content)
             results.append({
                 "title": _clean(doc.get("title") or ident),
                 "page": f"https://archive.org/details/{ident}",

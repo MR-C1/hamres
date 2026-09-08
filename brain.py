@@ -13,6 +13,7 @@ import jobs
 import llm
 import state
 import yt
+import yt_analytics
 
 SYSTEM = ("You are the growth manager of FOOTNOTE — a faceless YouTube "
           "facts/mystery channel. The brand idea: every video is the "
@@ -306,7 +307,92 @@ def daily_report():
     if best:
         lines.append(f"Top video: {comms.esc(best['title'][:60])} "
                      f"— {best['views']:,} views")
+    lines += _retention_lines(pub)
     comms.send("\n".join(lines), html=True)
+
+
+def _retention_lines(pub):
+    """Analytics lines for the daily report: average retention split by
+    format, plus the best-retaining long-form. Never raises — a missing
+    analytics consent costs the report nothing (the one-time setup hint
+    goes out through _maybe_nag_analytics)."""
+    try:
+        report, reason = yt_analytics.video_report(days=28)
+    except Exception as e:
+        comms.log(f"analytics snapshot failed: {e}")
+        return []
+    _maybe_nag_analytics(reason)
+    merged = [(v, report[v["id"]]) for v in pub if v.get("id") in report]
+    if not merged:
+        return []
+    lines = []
+    longs = [(v, a) for v, a in merged if v.get("duration_s", 0) >= 180]
+    shorts = [(v, a) for v, a in merged if v.get("duration_s", 0) < 180]
+    if longs:
+        avg = sum(a["avg_pct"] for _, a in longs) / len(longs)
+        mins = sum(a["minutes"] for _, a in longs)
+        best = max(longs, key=lambda x: x[1]["avg_pct"])
+        lines.append(f"Retention (longs): <b>{avg:.0f}%</b> avg • "
+                     f"{mins:,.0f} min watched • best: "
+                     f"{comms.esc(best[0]['title'][:40])} "
+                     f"({best[1]['avg_pct']:.0f}%)")
+    if shorts:
+        avg = sum(a["avg_pct"] for _, a in shorts) / len(shorts)
+        mins = sum(a["minutes"] for _, a in shorts)
+        lines.append(f"Retention (shorts): <b>{avg:.0f}%</b> avg • "
+                     f"{mins:,.0f} min watched over {len(shorts)} shorts")
+    return lines
+
+
+def _maybe_nag_analytics(reason):
+    """One Telegram hint per distinct blocker — never daily spam, and
+    never a repeat once the owner has fixed it (the reason stops
+    appearing). Clearing the flag on ok/empty makes a REGRESSION (token
+    swapped back) visible again."""
+    if reason in ("ok", "empty"):
+        state.STATE.setdefault("analytics_nag", {}).clear()
+        return
+    nags = state.STATE.setdefault("analytics_nag", {})
+    if nags.get(reason):
+        return
+    nags[reason] = True
+    state.save_soon()
+    if reason == "scope":
+        comms.send(
+            "📉 <b>Analytics loop needs a one-time re-consent</b>\n"
+            "Retention &amp; watch-time data needs its own YouTube "
+            "permission. On the PC, run extract_refresh_token.py "
+            "(updated — it now asks for analytics), then replace "
+            "YT_REFRESH_TOKEN on Render. Reports keep working without "
+            "it in the meantime.", html=True)
+    elif reason == "disabled":
+        comms.send(
+            "📉 <b>Analytics: enable the API</b>\n"
+            "console.cloud.google.com → APIs &amp; Services → Library → "
+            "enable <b>YouTube Analytics API</b> (same project as the "
+            "upload credentials).", html=True)
+
+
+def _plan_rows(videos, report):
+    """One line per video for the strategist prompt. With analytics,
+    each line carries retention and watched-minutes — the numbers that
+    say which FORMAT works, not just which video got lucky with views.
+    Pure function: testable without the API."""
+    rows = []
+    for v in videos[:20]:
+        base = (f"- {v['title']} | {v['views']} views | {v['likes']} likes "
+                f"| {v['comments']} comments | published {v['published']}"
+                f" | {max(v.get('duration_s', 0) // 60, 1)} min")
+        a = report.get(v["id"])
+        if a:
+            extra = (f" | {a['avg_pct']:.0f}% retained"
+                     f" | {a['minutes']:.0f} min watched"
+                     f" | +{a['subs_gained']} subs")
+            if "ctr" in a:
+                extra += f" | CTR {a['ctr'] * 100:.1f}%"
+            base += extra
+        rows.append(base)
+    return rows
 
 
 def analyze_and_plan():
@@ -325,10 +411,16 @@ def analyze_and_plan():
         queue_next_video(1)
         return
 
-    summary = "\n".join(f"- {v['title']} | {v['views']} views | "
-                        f"{v['likes']} likes | {v['comments']} comments | "
-                        f"published {v['published']}"
-                        for v in videos[:20])
+    # the learning loop's fuel: retention > views. A missing analytics
+    # consent just means the plain rows (degrades to the old behavior).
+    try:
+        report, reason = yt_analytics.video_report(days=28)
+    except Exception as e:
+        comms.log(f"plan: analytics failed {e}")
+        report, reason = {}, "other"
+    _maybe_nag_analytics(reason)
+    summary = "\n".join(_plan_rows(videos, report))
+    has_retention = bool(report)
     guidance = gemini(f"""Channel stats for our facts/mystery channel:
 
 {summary}
@@ -337,6 +429,7 @@ Analyze like a professional YouTube strategist:
 1. Which topics/styles CLEARLY outperform? Which underperform?
 2. In one short paragraph, give the topic direction for the next videos.
 3. Keep it concise — under 150 words total.
+{"RETENTION AND WATCHED-MINUTES ARE INCLUDED — they matter MORE than raw views: a video with fewer views but higher retention is the format to double down on. Call out the ideal video length if the data shows one." if has_retention else "No retention data yet (analytics not connected) — judge by views and engagement."}
 Respond with just the analysis and direction, no preamble.""")
     if guidance:
         state.STATE["topic_direction"] = guidance

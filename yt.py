@@ -5,6 +5,8 @@ Covers: channel stats, own-video listing with statistics, title updates,
 comment reading and replies. Heavy operations (upload) stay on the PC.
 """
 
+import re
+
 import config
 
 _service = None
@@ -81,6 +83,15 @@ def channel_stats():
     return _with_retries(once)
 
 
+def _iso_dur(s):
+    """ISO-8601 duration (PT4M13S) -> seconds."""
+    m = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", s or "")
+    if not m:
+        return 0
+    h, mi, sec = (int(x) if x else 0 for x in m.groups())
+    return h * 3600 + mi * 60 + sec
+
+
 def my_videos(max_results=30):
     """Own videos with statistics, newest first. Uses the uploads playlist
     (cheap) instead of search.list (100 quota units)."""
@@ -96,7 +107,7 @@ def my_videos(max_results=30):
         ids = [i["contentDetails"]["videoId"] for i in r.get("items", [])]
         if not ids:
             return []
-        v = yt.videos().list(part="snippet,statistics,status",
+        v = yt.videos().list(part="snippet,statistics,status,contentDetails",
                              id=",".join(ids)).execute()
         out = []
         for item in v.get("items", []):
@@ -110,6 +121,9 @@ def my_videos(max_results=30):
                 "comments": int(st.get("commentCount", 0)),
                 "privacy": item.get("status", {}).get("privacyStatus", ""),
                 "publish_at": item.get("status", {}).get("publishAt", ""),
+                # long vs short split for the analytics loop
+                "duration_s": _iso_dur(item.get("contentDetails", {})
+                                       .get("duration", "")),
             })
         return out
     return _with_retries(once)

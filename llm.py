@@ -87,6 +87,14 @@ def _openai_compatible(base, key, model, prompt, system, max_tokens):
     if resp.status_code != 200:
         raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:300]}")
     data = resp.json()
+    if "choices" not in data:
+        # OpenRouter sometimes answers HTTP 200 with an error body
+        # ({\"error\": {...}}) — surface it readably instead of a bare
+        # KeyError('choices') that tells us nothing
+        err = data.get("error")
+        msg = ((err.get("message") if isinstance(err, dict) else None)
+               or str(err))[:250]
+        raise RuntimeError(f"no choices in response: {msg}")
     msg = data["choices"][0]["message"]
     content = msg.get("content") or ""
     if not content.strip():

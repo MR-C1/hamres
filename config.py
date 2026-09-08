@@ -54,6 +54,12 @@ YT_CLIENT_ID = os.environ.get("YT_CLIENT_ID", "")
 YT_CLIENT_SECRET = os.environ.get("YT_CLIENT_SECRET", "")
 YT_SCOPES = ["https://www.googleapis.com/auth/youtube.force-ssl",
              "https://www.googleapis.com/auth/youtube.readonly"]
+# NOTE: yt-analytics.readonly is deliberately NOT here — the live refresh
+# token was consented for the two scopes above only, and asking a refresh
+# grant for a scope it never got is an instant invalid_scope. The
+# analytics module (yt_analytics.py) uses its own credentials with that
+# scope and degrades gracefully until the owner re-consents via the
+# updated extract_refresh_token.py.
 
 # gist-backed state (same pattern as hermes-agent)
 GIST_TOKEN = os.environ.get("GIST_TOKEN", "")

@@ -630,6 +630,49 @@ body[data-role="visitor"] textarea,
 body[data-role="visitor"] .field input{pointer-events:none;background:var(--wash);color:var(--muted)}
 .rolebadge{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--rule);border-radius:999px;padding:2px 10px;font-size:12.5px;color:var(--muted)}
 .rolebadge .dot{width:7px;height:7px;border-radius:50%;background:var(--amber)}
+/* ---- hidden stays hidden -------------------------------------------------------
+   An author display rule beats the UA's [hidden]{display:none}, so .rolebadge
+   (display:inline-flex) was overriding the attribute and the visitor badge
+   showed for everyone. One reset closes that whole class of bug. */
+[hidden]{display:none!important}
+
+/* ---- retention ---- */
+/* format chip: neutral for a Short, blue for a Long — format is a fact, not
+   a status, so it does not borrow the public/private colors */
+.chip.fmt-long{color:var(--blue);border-color:#c9d8ee}
+.chip.fmt-long .dot{background:var(--blue)}
+.retbar{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin:2px 0 8px}
+.retbar .big{font:600 26px/1 var(--sans);font-variant-numeric:proportional-nums}
+.retbar .lead-in{font-size:13.5px;color:var(--muted)}
+.steps{margin:10px 0 0;padding:0;list-style:none;counter-reset:step}
+.steps li{counter-increment:step;position:relative;padding:8px 0 8px 34px;border-bottom:1px solid var(--rule-soft);font-size:14px;line-height:1.5}
+.steps li:last-child{border-bottom:0}
+.steps li::before{content:counter(step);position:absolute;left:0;top:9px;width:22px;height:22px;border:1px solid var(--rule);border-radius:50%;display:flex;align-items:center;justify-content:center;font:600 12px var(--mono);color:var(--muted);background:var(--wash)}
+.steps code{font-family:var(--mono);font-size:12px;background:var(--wash);padding:1px 5px;border-radius:3px;word-break:break-all}
+
+/* ---- system health ---- */
+.hchips{display:flex;flex-wrap:wrap;gap:6px}
+.chip.on{color:var(--green);border-color:#cfe3d3;background:#f4f8f1}
+.chip.on .dot{background:var(--green)}
+.sysnote{font:12.5px/1.6 var(--mono);color:var(--muted);white-space:pre-wrap;background:var(--paper);border:1px solid var(--rule-soft);border-radius:var(--rad);padding:10px 12px;max-height:150px;overflow-y:auto;margin-top:10px}
+
+/* ---- script viewer modal ---- */
+/* outside every container render() rewrites, so a 15s poll cannot kill it */
+.modal{position:fixed;inset:0;z-index:60;background:rgba(20,20,30,.55);display:flex;align-items:flex-start;justify-content:center;padding:4vh 16px;overflow-y:auto}
+.modal-card{background:var(--card);border:1px solid var(--ink);border-radius:var(--rad);max-width:760px;width:100%;box-shadow:0 12px 40px rgba(20,20,30,.35)}
+.modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 20px;border-bottom:2px solid var(--ink);position:sticky;top:0;background:var(--card);z-index:1}
+.modal-head h3{font:600 21px/1.25 var(--serif)}
+.modal-body{padding:14px 20px 24px}
+.hookq{border-left:3px solid var(--red);padding:2px 0 2px 12px;font:italic 400 16px/1.5 var(--serif);margin:6px 0 10px}
+.scn{border-top:1px solid var(--rule-soft);padding:13px 0}
+.scn:first-child{border-top:0}
+.scn .scn-n{font:600 12px var(--mono);color:var(--muted);letter-spacing:.06em}
+.scn .scn-t{font-size:15px;line-height:1.6;margin:4px 0 6px;white-space:pre-wrap}
+.scn .scn-meta{font-size:12.5px;color:var(--muted);display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+.scn .scn-meta .chip{font-size:11.5px;padding:1px 7px}
+.scn .short-cut{border-top:1px dashed var(--rule);margin-top:9px;padding-top:8px}
+.scn .short-cut .scn-t{font-size:13.5px;color:var(--muted)}
+
 @media (prefers-reduced-motion:reduce){
   .mast-star.live .spokes,.st-render .dot{animation:none}
   /* the ring stays as a static mark; the "Working…" label is what carries it */
@@ -722,6 +765,21 @@ body[data-role="visitor"] .field input{pointer-events:none;background:var(--wash
     </div>
   </div>
 
+  <!-- Retention is the learning loop's output: which format actually holds
+       viewers. The Analytics API needs its own consent, so until the owner
+       unlocks it this section carries the two-step how-to instead of numbers. -->
+  <div class="sec"><h2>Retention</h2><span class="note" id="retnote"></span></div>
+  <div class="duo">
+    <div class="card" id="retbox"></div>
+    <div class="card" id="retfmt"></div>
+  </div>
+  <div class="card" style="padding:4px 18px" id="rettable-card" hidden>
+    <div class="tblwrap"><table class="rtable" aria-label="Retention by film">
+      <thead><tr><th>Film</th><th>Format</th><th class="num">Views</th><th class="num">Minutes</th><th class="num">Retained</th><th class="num">Subs</th><th class="num">CTR</th></tr></thead>
+      <tbody id="retrows"></tbody>
+    </table></div>
+  </div>
+
   <div class="sec"><h2>Render queue</h2><span class="note" id="queuenote"></span></div>
   <div class="card" style="padding:4px 18px">
     <div class="tblwrap"><table class="rtable" aria-label="Render queue">
@@ -739,16 +797,29 @@ body[data-role="visitor"] .field input{pointer-events:none;background:var(--wash
     <div class="rowline"><span style="flex:0 0 150px;color:var(--muted);font-size:13.5px">Renderer</span><span class="grow" id="op-worker"></span></div>
     <div class="rowline"><span style="flex:0 0 150px;color:var(--muted);font-size:13.5px">Ran today</span><span class="grow"><span class="tags" id="op-sched"></span></span></div>
     <div class="rowline"><span style="flex:0 0 150px;color:var(--muted);font-size:13.5px">Publishing</span><span class="grow" id="op-hour"></span></div>
+    <div class="rowline"><span style="flex:0 0 150px;color:var(--muted);font-size:13.5px">Uploads today</span><span class="grow" id="op-uploads"></span></div>
+    <div class="rowline"><span style="flex:0 0 150px;color:var(--muted);font-size:13.5px">Renderer wakes</span><span class="grow" id="op-next"></span></div>
     <div class="actions" style="margin-top:12px">
       <button class="btn btn-sm" data-act="wake">Wake the renderer</button>
       <button class="btn btn-sm" data-act="refresh_channel">Refresh channel data</button>
     </div>
   </div>
+
+  <!-- What the agent is wired to. Counts and on/off only — no key material,
+       and visitors see the same diagram they can read everywhere else. -->
+  <div class="sec"><h2>System</h2><span class="note" id="sysnote"></span></div>
+  <div class="card" id="sysbox"></div>
 </section>
 
 <!-- ============ FILMS ============ -->
 <section class="tab" id="t-films" role="tabpanel" aria-labelledby="tab-films">
   <div class="sec"><h2>Films</h2><span class="note">Every upload, public and private.</span></div>
+  <div class="lbar" role="group" aria-label="Film tools">
+    <input type="text" id="filmq" placeholder="Filter by title…" style="min-width:200px" aria-label="Filter films by title">
+    <span style="flex:1"></span>
+    <button class="btn btn-sm" data-local="csvfilms">Films CSV</button>
+    <button class="btn btn-sm" data-local="csvhistory">History CSV</button>
+  </div>
   <div class="sortbar">
     <label for="sortk">Sort by</label>
     <select id="sortk">
@@ -758,6 +829,8 @@ body[data-role="visitor"] .field input{pointer-events:none;background:var(--wash
       <option value="published">Published</option>
       <option value="title">Title</option>
       <option value="privacy">Status</option>
+      <option value="duration">Format</option>
+      <option value="avg_pct">Retention</option>
     </select>
     <button class="btn btn-sm" id="sortdir" aria-pressed="false">Reverse order</button>
   </div>
@@ -766,9 +839,11 @@ body[data-role="visitor"] .field input{pointer-events:none;background:var(--wash
       <thead><tr>
         <th class="sortable" data-k="title" scope="col"><button type="button">Title</button></th>
         <th class="sortable" data-k="privacy" scope="col"><button type="button">Status</button></th>
+        <th class="sortable" data-k="duration" scope="col"><button type="button">Format</button></th>
         <th class="sortable num" data-k="views" scope="col"><button type="button">Views</button></th>
         <th class="sortable num" data-k="likes" scope="col"><button type="button">Likes</button></th>
         <th class="sortable num" data-k="comments" scope="col"><button type="button">Comments</button></th>
+        <th class="sortable num" data-k="avg_pct" scope="col"><button type="button">Retained</button></th>
         <th class="sortable" data-k="published" scope="col"><button type="button">Published</button></th>
         <th scope="col"><span class="visually-hidden">Actions</span></th>
       </tr></thead>
@@ -914,6 +989,19 @@ body[data-role="visitor"] .field input{pointer-events:none;background:var(--wash
 
 </div>
 <div id="toast" role="status" aria-live="polite"></div>
+
+<!-- The script viewer. It sits outside .wrap and outside every container
+     render() rewrites, so the 15s poll repaints the page around it without
+     ever closing it. -->
+<div class="modal" id="modal" hidden role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3 id="modal-title">Script</h3>
+      <button class="btn btn-sm" id="modal-x">Close</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
 
 <style>.visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}</style>
 <script>
@@ -1425,6 +1513,9 @@ function render(){
   /* work the panel started and has not seen finish */
   pruneWork(); drawWorking();
 
+  /* retention, when the learning loop has eyes for it */
+  const ana = d.analytics || {};
+
   /* KPI tiles */
   const tiles = [];
   tiles.push(tile("Subscribers", fmt(d.channel.subs), deltaSub(d.delta.subs), sparkHTML(d.history.map(x=>x.subs))));
@@ -1437,6 +1528,10 @@ function render(){
   tiles.push(tile("Decisions", d.queue.awaiting, null, null, d.queue.awaiting ? "waiting on you" : "nothing waiting"));
   tiles.push(tile("Auto-approve", d.settings.auto_approve ? "on" : "off", null, null,
     "trust " + d.settings.approved + " of 10" + (d.settings.paused ? ", paused" : "")));
+  tiles.push(tile("Retention", ana.avg_pct != null ? ana.avg_pct + "%" : "—", null, null,
+    ana.avg_pct != null
+      ? ((ana.rows||[]).length + " films · " + fmt(ana.minutes) + " min watched")
+      : "not connected — how to fix, below"));
   $("kpis").innerHTML = tiles.join("");
   flashChanged();
 
@@ -1486,6 +1581,14 @@ function render(){
     (d.best_hour != null && d.best_hour !== "" && Number(d.best_hour) !== Number(hr)
       ? ' · <span style="color:var(--muted)">the numbers prefer ' + esc(pad2(d.best_hour)) + ':00</span>'
       : ' · <span style="color:var(--muted)">matches the best hour so far</span>');
+  /* uploads today: with ~6/day of quota, the count is a budget, not a vanity figure */
+  $("op-uploads").innerHTML = "<b>" + (d.uploads_today || 0) + "</b>" +
+    ' <span style="color:var(--muted)">of about 6 the YouTube quota allows</span>';
+  $("op-next").innerHTML = esc(nextRenderText());
+
+  /* retention + system: painted fresh each pass, cheap string work */
+  paintRetention(ana);
+  paintHealth(d.health, ana);
 
   /* jobs */
   $("queuenote").textContent = d.queue.pending + " waiting, " + d.queue.claimed + " rendering, " + d.queue.failed + " failed";
@@ -1497,9 +1600,12 @@ function render(){
       '<td><span class="cl">Status</span><span class="st st-'+st[0]+'"><span class="dot"></span>'+st[1]+'</span></td>'+
       '<td class="num"><span class="cl">Age</span>'+dur(j.age)+'</td>'+
       '<td class="mono"><span class="cl">Job</span>'+esc(String(j.id).slice(0,8))+'</td>'+
+      /* data-script, not data-act: reading is offered to a visitor too, and
+         the visitor CSS hides anything carrying data-act */
+      '<td class="act">'+(j.has_script ? '<button class="linkbtn" data-script="'+esc(j.id)+'">Script</button>' : '')+
       /* a job already claimed by the renderer cannot be called back, so it is not
          offered — the agent would refuse it anyway */
-      '<td class="act">'+(j.status === "pending" || j.status === "failed"
+      (j.status === "pending" || j.status === "failed"
         ? '<button class="linkbtn" data-act="killjob:'+esc(j.id)+'" data-confirm="Drop this job?">Cancel</button>'
         : '')+'</td></tr>';
   }).join("") || '<tr><td colspan="5" class="empty">Queue is empty. Commission a video from the Studio tab.</td></tr>';
@@ -1515,29 +1621,51 @@ function render(){
   });
   $("sortk").value = VID.k;
   $("sortdir").setAttribute("aria-pressed", String(VID.asc));
+  /* retention merges in by video id — the Films tab can then be sorted by it,
+     which is the whole point of the learning loop */
+  const retById = {};
+  ((d.analytics||{}).rows||[]).forEach(r => { retById[r.id] = r; });
+  const q = FILM_Q.toLowerCase();
+  const shown = d.videos.filter(v => !q || String(v.title || "").toLowerCase().includes(q));
+  shown.forEach(v => { const a = retById[v.id]; v.avg_pct = a ? a.avg_pct : undefined; });
   /* sort on every render, so the order always matches what the controls claim */
-  $("vids").innerHTML = d.videos.slice().sort(cmpVid).map(v =>
-    '<tr><td class="lead"><a class="ttl" href="https://youtu.be/'+esc(v.id)+'" target="_blank" rel="noopener">'+esc(v.title)+'</a></td>'+
+  $("vids").innerHTML = shown.slice().sort(cmpVid).map(v => {
+    const a = retById[v.id], long = (v.duration_s || 0) >= 180;
+    return '<tr><td class="lead"><a class="ttl" href="https://youtu.be/'+esc(v.id)+'" target="_blank" rel="noopener">'+esc(v.title)+'</a></td>'+
     '<td><span class="cl">Status</span><span class="chip '+(v.privacy==="public"?"pub":"priv")+'"><span class="dot"></span>'+esc(v.privacy)+'</span></td>'+
+    '<td><span class="cl">Format</span><span class="chip'+(long?' fmt-long':'')+'"><span class="dot"></span>'+(long?'Long':'Short')+'</span></td>'+
     '<td class="num"><span class="cl">Views</span><b>'+fmt(v.views)+'</b></td>'+
     '<td class="num"><span class="cl">Likes</span>'+fmt(v.likes)+'</td>'+
     '<td class="num"><span class="cl">Comments</span>'+fmt(v.comments)+'</td>'+
+    '<td class="num"><span class="cl">Retained</span>'+(a ? '<b>'+a.avg_pct+'%</b>' : '<span style="color:var(--muted)">—</span>')+'</td>'+
     '<td style="color:var(--muted)"><span class="cl">Published</span>'+esc(shortDate(v.published))+'</td>'+
     '<td class="act">'+(v.privacy !== "public"
       ? '<button class="linkbtn" data-act="vpub:'+esc(v.id)+'">Make public</button>'
-      : '<button class="linkbtn" data-act="vpriv:'+esc(v.id)+'">Make private</button>')+'</td></tr>'
-  ).join("") || '<tr><td colspan="7" class="empty">No films yet — the first one appears here once a render finishes.</td></tr>';
+      : '<button class="linkbtn" data-act="vpriv:'+esc(v.id)+'">Make private</button>')+'</td></tr>';
+  }).join("") || '<tr><td colspan="9" class="empty">'+
+    (q ? "Nothing titled like “"+esc(FILM_Q)+"”." : "No films yet — the first one appears here once a render finishes.")+'</td></tr>';
   headIf("vids");
 
   /* decisions */
-  $("decisions").innerHTML = d.pending.map(p =>
-    '<div class="card">'+
+  $("decisions").innerHTML = d.pending.map(p => {
+    /* every uploaded cut, as its own watch link — the list runs Short, scene
+       Shorts, Long, so the ends get named and the middle ones say what they are */
+    const urls = p.urls || [];
+    const watch = urls.map((u,i) => {
+      const label = urls.length === 1 ? "Watch on YouTube"
+        : i === 0 ? "Short"
+        : i === urls.length - 1 ? "Long"
+        : "Scene short " + i;
+      return '<a class="chip" href="'+esc(safeUrl(u) || "#")+'" target="_blank" rel="noopener"><span class="dot"></span>'+esc(label)+' ↗</a>';
+    }).join("");
+    return '<div class="card">'+
     '<div class="rowline" style="border:0;padding:0 0 6px">'+
       (safeUrl(p.url)
         ? '<a class="ttl" style="font-size:16px" href="'+esc(safeUrl(p.url))+'" target="_blank" rel="noopener">'+esc(p.title)+'</a>'
         : '<span class="ttl" style="font-size:16px">'+esc(p.title)+'</span>')+
       '<span class="grow"></span>'+
       '<span class="chip">'+p.formats+(p.formats === 1 ? ' format' : ' formats')+'</span></div>'+
+    (watch ? '<div class="tags" style="margin:2px 0 12px">'+watch+'</div>' : '')+
     '<div class="actions">'+
       '<button class="btn btn-primary" data-act="publish:'+esc(p.id)+'">Publish</button>'+
       '<button class="btn btn-danger" data-confirm="Delete from YouTube permanently?" data-act="reject:'+esc(p.id)+'">Delete</button>'+
@@ -1547,8 +1675,8 @@ function render(){
       p.alts.map((a,i) => '<div class="rowline" style="padding:8px 0"><span class="grow">'+esc(a)+'</span>'+
         '<button class="btn btn-sm" data-act="retitle:'+esc(p.id)+':'+i+'">Use this title</button></div>').join("")+
     '</div>' : '')+
-    '</div>'
-  ).join("") || '<div class="card empty" style="border-style:dashed">Nothing waiting. Finished renders land here for your call, and in Telegram.</div>';
+    '</div>';
+  }).join("") || '<div class="card empty" style="border-style:dashed">Nothing waiting. Finished renders land here for your call, and in Telegram.</div>';
 
   /* drafted comment replies — until now these could only be answered from Telegram */
   const reps = d.replies || [];
@@ -1641,6 +1769,31 @@ const LOCAL = {
     $("direction").value = (DATA && DATA.direction) || "";
     syncDirty();
     toast("Back to the agent's own words");
+  },
+  csvfilms: () => {
+    if (!DATA) return;
+    const retById = {};
+    ((DATA.analytics || {}).rows || []).forEach(r => { retById[r.id] = r; });
+    const rows = [["Title", "Status", "Format", "Views", "Likes", "Comments",
+                   "Retained %", "Subs gained", "CTR %", "Published", "URL"]];
+    (DATA.videos || []).forEach(v => {
+      const a = retById[v.id];
+      rows.push([v.title, v.privacy, (v.duration_s || 0) >= 180 ? "Long" : "Short",
+        v.views, v.likes, v.comments, a ? a.avg_pct : "", a ? a.subs : "",
+        a && a.ctr != null ? a.ctr : "", v.published,
+        "https://youtu.be/" + v.id]);
+    });
+    csvDownload("footnote-films.csv", rows);
+    jlog("panel", "exported " + (rows.length - 1) + " films as CSV");
+    toast(rows.length - 1 + " films exported");
+  },
+  csvhistory: () => {
+    if (!DATA) return;
+    const rows = [["Date", "Subscribers", "Views"]];
+    (DATA.history || []).forEach(h => rows.push([h.date, h.subs, h.views]));
+    csvDownload("footnote-history.csv", rows);
+    jlog("panel", "exported " + (rows.length - 1) + " days of history as CSV");
+    toast(rows.length - 1 + " days exported");
   },
   clearjournal: () => {
     const n = JOURNAL.length;
@@ -2004,12 +2157,214 @@ function fillTable(id, rows){
     "<tr><td>"+esc(r[0])+"</td><td class=\"num\">"+esc(r[1])+"</td></tr>").join("");
 }
 
+/* ---- retention: the learning loop's output, or the how-to that unlocks it ----
+   The Analytics API needs its own consent, so the same card that one day shows
+   numbers today carries the two steps the owner has to take. The steps mirror
+   the one-time Telegram nag exactly, so the two never disagree. */
+function paintRetention(ana){
+  ana = ana || {};
+  const rows = ana.rows || [], fm = ana.formats || {};
+  const REASON = {
+    ok:       ["st-done", "Connected"],
+    pending:  ["st-wait", "Collecting the numbers…"],
+    empty:    ["st-wait", "Connected — nothing in the window yet"],
+    scope:    ["st-fail", "Needs a one-time re-consent"],
+    disabled: ["st-fail", "Analytics API is switched off"],
+    other:    ["st-off", "Unavailable right now"]
+  };
+  const r = ana.reason || "other";
+  const st = REASON[r] || REASON.other;
+  $("retnote").textContent = "Watch time from the YouTube Analytics API, last 28 days — the numbers land 2–3 days late. Updated " + (ana.when || "") + ".";
+  if (r === "ok" && rows.length) {
+    $("retbox").innerHTML =
+      '<div class="rowline" style="border:0;padding-top:0"><span class="grow" style="min-width:0">'+
+        '<span class="st '+st[0]+'"><span class="dot"></span>'+st[1]+'</span></span></div>'+
+      '<div class="retbar"><span class="big">'+(ana.avg_pct != null ? ana.avg_pct + "%" : "—")+'</span>'+
+        '<span class="lead-in">average share of each film watched — a Short and a documentary count as one film each</span></div>'+
+      '<div class="rowline"><span class="grow" style="min-width:0;color:var(--muted);font-size:13.5px">Minutes watched</span><b>'+fmt(ana.minutes)+'</b></div>'+
+      '<div class="rowline"><span class="grow" style="min-width:0;color:var(--muted);font-size:13.5px">Films with data</span><b>'+rows.length+'</b></div>';
+    const fmtRow = (label, f) =>
+      '<div class="rowline"><span class="grow" style="min-width:0"><b style="font-size:15px">'+label+'</b>'+
+        '<span style="color:var(--muted);font-size:13px;display:block">'+f.n+(f.n === 1 ? ' film' : ' films')+' · '+fmt(f.avg_views || 0)+' avg views</span></span>'+
+      '<span style="text-align:right"><b style="font-size:17px">'+(f.avg_pct == null ? '—' : f.avg_pct + '%')+'</b>'+
+        '<span style="color:var(--muted);font-size:13px;display:block">'+fmt(f.minutes)+' min watched</span></span></div>';
+    $("retfmt").innerHTML = fmtRow("Long-form", fm.longs || {n:0, avg_pct:null, minutes:0, avg_views:0}) +
+      fmtRow("Shorts", fm.shorts || {n:0, avg_pct:null, minutes:0, avg_views:0}) +
+      '<div class="help">The split is the same one the daily report uses: 3 minutes or more is a long.</div>';
+    $("rettable-card").hidden = false;
+    $("retrows").innerHTML = rows.map(x =>
+      '<tr><td class="lead"><a class="ttl" href="https://youtu.be/'+esc(x.id)+'" target="_blank" rel="noopener">'+esc(x.title)+'</a></td>'+
+      '<td><span class="cl">Format</span><span class="chip'+(x.duration_s >= 180 ? ' fmt-long' : '')+'"><span class="dot"></span>'+(x.duration_s >= 180 ? 'Long' : 'Short')+'</span></td>'+
+      '<td class="num"><span class="cl">Views</span>'+fmt(x.views)+'</td>'+
+      '<td class="num"><span class="cl">Minutes</span>'+fmt(x.minutes)+'</td>'+
+      '<td class="num"><span class="cl">Retained</span><b>'+x.avg_pct+'%</b></td>'+
+      '<td class="num"><span class="cl">Subs</span>'+(x.subs ? '+' + fmt(x.subs) : '—')+'</td>'+
+      '<td class="num"><span class="cl">CTR</span>'+(x.ctr != null ? x.ctr + '%' : '—')+'</td></tr>'
+    ).join("");
+    headIf("retrows");
+  } else {
+    const STEPS = {
+      scope: ["Turn on the <b>YouTube Analytics API</b> in the Google Cloud project that owns the channel — console.cloud.google.com → APIs &amp; Services → Library.",
+              "On the PC, run <code>extract_refresh_token.py</code> again (it now asks for the analytics permission), then replace <code>YT_REFRESH_TOKEN</code> on Render."],
+      disabled: ["Turn on the <b>YouTube Analytics API</b> in the Google Cloud project that owns the channel — console.cloud.google.com → APIs &amp; Services → Library."],
+      empty: [], other: []
+    }[r] || [];
+    const WHY = {
+      pending: "The first fetch is running off-thread — the next refresh carries the numbers.",
+      scope: "The upload key was consented before analytics existed, and YouTube never extends a consent on its own. Until it is re-given, everything else keeps working — the daily report just ships without these numbers.",
+      disabled: "The Analytics API is a separate switch in the same Cloud project as the upload key. Nothing is broken; the numbers are simply not being collected.",
+      empty: "The API answers, but nothing has landed in the window yet — analytics runs 2–3 days behind. Give it a few days after the first public views.",
+      other: "The Analytics API refused just now. The agent keeps working and retries on every report; this section comes back on its own."
+    }[r] || "";
+    $("retbox").innerHTML =
+      '<div class="rowline" style="border:0;padding-top:0"><span class="grow" style="min-width:0">'+
+        '<span class="st '+st[0]+'"><span class="dot"></span>'+st[1]+'</span></span></div>'+
+      '<div style="font-size:14px;line-height:1.6;color:var(--ink);margin-top:4px">'+WHY+'</div>';
+    $("retfmt").innerHTML = STEPS.length
+      ? '<h3 style="font:600 17px/1.2 var(--serif);margin-bottom:2px">To turn it on</h3><ol class="steps">'+
+        STEPS.map(s => '<li>'+s+'</li>').join("")+'</ol>'
+      : '<div class="empty" style="padding:14px 0">Nothing to do — this resolves itself.</div>';
+    $("rettable-card").hidden = true;
+  }
+}
+
+/* ---- system health: a wiring diagram, not a keyring ---- */
+function paintHealth(h, ana){
+  h = h || {};
+  const chip = (on, label) => '<span class="chip'+(on ? ' on' : '')+'"><span class="dot"></span>'+esc(label)+'</span>';
+  const ai = [
+    chip((h.gemini_keys || 0) > 0, "gemini" + ((h.gemini_keys || 0) > 1 ? " ×" + h.gemini_keys : "")),
+    chip(!!h.groq, "groq"),
+    chip(!!h.openrouter, "openrouter"),
+    chip(!!h.cloudflare, "cloudflare")
+  ].join("");
+  const conn = [
+    chip(!!h.youtube, "youtube uploads"),
+    chip(!!h.analytics_token && (ana || {}).reason === "ok", "youtube analytics"),
+    chip(!!h.gist, "state gist"),
+    chip(!!h.telegram, "telegram"),
+    chip(!!h.dispatch, "renderer dispatch")
+  ].join("");
+  const ld = h.lastdiag || {};
+  $("sysnote").textContent = "What the agent is wired to. Dim means not configured, not broken — the provider test says more.";
+  $("sysbox").innerHTML =
+    '<div class="rowline"><span style="flex:0 0 150px;color:var(--muted);font-size:13.5px">AI providers</span><span class="grow"><span class="hchips">'+ai+'</span></span></div>'+
+    '<div class="rowline"><span style="flex:0 0 150px;color:var(--muted);font-size:13.5px">Connections</span><span class="grow"><span class="hchips">'+conn+'</span></span></div>'+
+    '<div class="rowline"><span style="flex:0 0 150px;color:var(--muted);font-size:13.5px">Provider test</span><span class="grow" style="min-width:0">'+
+      (ld.text
+        ? '<span style="font-size:13.5px;color:var(--muted)">last run '+esc(ld.t || "")+'</span> <button class="linkbtn" data-act="diag">Run again</button>'+
+          '<div class="sysnote">'+esc(ld.text)+'</div>'
+        : '<span style="color:var(--muted);font-size:13.5px">never run from the panel</span> <button class="linkbtn" data-act="diag">Test every provider</button>')+
+    '</span></div>';
+}
+
+/* ---- the renderer's three cron slots, Dhaka time ----
+   The browser already computes Dhaka time for the masthead clock; the same
+   formatter reads it back so "next" is right wherever the panel is read from. */
+function nextRenderText(){
+  const s = dhakaStamp();                       /* YYYY-MM-DD HH:MM:SS in Dhaka */
+  const cur = (+s.slice(11,13)) * 60 + (+s.slice(14,16));
+  let best = [9,23], bestDiff = Infinity;
+  [[9,23],[17,23],[1,23]].forEach(sl => {
+    let diff = sl[0]*60 + sl[1] - cur;
+    if (diff <= 0) diff += 1440;
+    if (diff < bestDiff) { bestDiff = diff; best = sl; }
+  });
+  const inTxt = bestDiff < 60 ? Math.max(1, bestDiff) + " min" : Math.floor(bestDiff/60) + "h " + (bestDiff%60) + "m";
+  return "09:23 · 17:23 · 01:23 Dhaka — next " + pad2(best[0]) + ":" + pad2(best[1]) + ", in " + inTxt;
+}
+
+/* ---- script viewer ----
+   A direct fetch rather than act(): the answer is the script itself, not a
+   toast, and a visitor may read it (the server carves the same exception). */
+async function viewScript(jid, btn){
+  if (btn) busyOn(btn, "Opening…");
+  jlog("panel", "opened the script for " + String(jid).slice(0,8));
+  try {
+    const r = await fetch("/api/action", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({action: "script:" + jid})});
+    const d = await r.json();
+    if (!d.ok) { toast(d.error || "no script on that job", true); return; }
+    paintScript(d.script);
+  } catch(e) {
+    toast("Network error — couldn't fetch the script.", true);
+  } finally {
+    if (btn) busyOff(btn);
+  }
+}
+function paintScript(sc){
+  sc = sc || {};
+  $("modal-title").textContent = sc.title || "Script";
+  const scenes = (sc.scenes || []).map((s, i) => {
+    let h = '<div class="scn">'+
+      '<div class="scn-n">SCENE '+(i+1)+'</div>'+
+      '<div class="scn-t">'+esc(s.narration)+'</div>'+
+      '<div class="scn-meta">'+
+        (s.in_short ? '<span class="chip"><span class="dot"></span>in the Short</span>' : '')+
+        (s.source ? '<span>◈ source: '+esc(trim(s.source, 100))+'</span>' : '')+
+      '</div>';
+    if (s.short_narration) {
+      h += '<div class="short-cut">'+
+        '<div class="scn-meta"><span>standalone Short'+(s.short_title ? ' — “'+esc(s.short_title)+'”' : '')+'</span></div>'+
+        '<div class="scn-t">'+esc(s.short_narration)+'</div></div>';
+    }
+    return h + '</div>';
+  }).join("") || '<div class="empty">No scenes on this script.</div>';
+  $("modal-body").innerHTML =
+    (sc.hook ? '<blockquote class="hookq">'+esc(sc.hook)+'</blockquote>' : '')+
+    (sc.description ? '<div style="font-size:13.5px;color:var(--muted);margin:4px 0 10px">'+esc(sc.description)+'</div>' : '')+
+    scenes+
+    (sc.outro ? '<div class="scn" style="border-top:2px solid var(--ink)"><div class="scn-n">OUTRO</div><div class="scn-t">'+esc(sc.outro)+'</div></div>' : '')+
+    ((sc.tags || []).length ? '<div class="tags" style="margin-top:14px">'+sc.tags.map(t => '<span class="chip">'+esc(t)+'</span>').join("")+'</div>' : '');
+  $("modal").hidden = false;
+  document.body.style.overflow = "hidden";
+  $("modal-x").focus();
+}
+function closeModal(){
+  $("modal").hidden = true;
+  document.body.style.overflow = "";
+}
+$("modal-x").addEventListener("click", closeModal);
+$("modal").addEventListener("click", e => { if (e.target === $("modal")) closeModal(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("modal").hidden) closeModal(); });
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-script]");
+  if (!b || b.disabled) return;
+  viewScript(b.dataset.script, b);
+});
+
+/* ---- CSV export: the browser builds it, nothing touches the agent ---- */
+function csvDownload(name, rows){
+  const cell = c => {
+    const s = String(c == null ? "" : c);
+    /* quote anything with a comma, newline or quote in it — tested with
+       indexOf rather than a regex so the string contains no quote-in-slash
+       ambiguity for any tool that reads this script later */
+    if (s.indexOf(",") >= 0 || s.indexOf("\n") >= 0 || s.indexOf('"') >= 0)
+      return '"' + s.split('"').join('""') + '"';
+    return s;
+  };
+  const csv = rows.map(r => r.map(cell).join(",")).join("\r\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob(["\ufeff" + csv], {type: "text/csv;charset=utf-8"}));
+  a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
 /* ---- films sorting ---- */
-const THLABEL = {title:"Title",privacy:"Status",views:"Views",likes:"Likes",comments:"Comments",published:"Published"};
+const THLABEL = {title:"Title",privacy:"Status",views:"Views",likes:"Likes",comments:"Comments",published:"Published",duration:"Format",avg_pct:"Retained"};
 let VID = {k:"views", asc:false};
 function cmpVid(a,b){
   const x = a[VID.k], y = b[VID.k];
-  return (typeof x === "number" ? x-y : String(x).localeCompare(String(y))) * (VID.asc?1:-1);
+  /* retention is only present on films the Analytics API reported; a missing
+     number must sort to the bottom, not turn the subtraction into NaN */
+  if (typeof x === "number" || typeof y === "number") {
+    const nx = typeof x === "number" ? x : -1, ny = typeof y === "number" ? y : -1;
+    return (nx - ny) * (VID.asc ? 1 : -1);
+  }
+  return String(x).localeCompare(String(y)) * (VID.asc ? 1 : -1);
 }
 /* headers on wide screens, a select on phones — both drive the same sort */
 document.querySelector("#t-films thead").addEventListener("click", e => {
@@ -2020,6 +2375,13 @@ document.querySelector("#t-films thead").addEventListener("click", e => {
 });
 $("sortk").addEventListener("change", e => { VID.k = e.target.value; VID.asc = false; render(); });
 $("sortdir").addEventListener("click", () => { VID.asc = !VID.asc; render(); });
+/* the title filter: the input sits outside #vids, so a poll landing mid-typing
+   repaints the rows around it without stealing the focus */
+let FILM_Q = "";
+if ($("filmq")) $("filmq").addEventListener("input", e => {
+  FILM_Q = e.target.value.trim();
+  if (DATA) render();
+});
 
 /* ---- clock (Dhaka) + auto-refresh ---- */
 function tick(){
@@ -2037,10 +2399,11 @@ function refreshHeld(){
   if (!a || !a.closest) return false;
   /* #decisions is what the old code called #pending — the id moved and this check
      silently stopped covering the cards it was written for. The interactive
-     containers render() rewrites now include replies, titles, topic chips and the
-     mailbox. A field being typed into does NOT hold the poll: render() leaves a
-     dirty or focused field alone, so the rest of the panel can keep updating. */
-  return !!a.closest("#vids,#decisions,#jobs,#hooks,#replies,#titles,#topics,#out,#kpis");
+     containers render() rewrites now include replies, titles, topic chips, the
+     mailbox, the retention cards and the system card. A field being typed into
+     does NOT hold the poll: render() leaves a dirty or focused field alone, so
+     the rest of the panel can keep updating. */
+  return !!a.closest("#vids,#decisions,#jobs,#hooks,#replies,#titles,#topics,#out,#kpis,#retrows,#sysbox,#retbox,#retfmt");
 }
 setInterval(() => { if (!PAUSED && !document.hidden && !refreshHeld()) load(); }, 15000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden && !PAUSED) load(); });
@@ -2085,6 +2448,117 @@ def _channel_snapshot():
         return data
     except Exception:
         return _channel_cache["data"] or {"ch": {}, "vids": []}
+
+
+# Retention data gets its own cache: the Analytics API is a separate service
+# with its own latency, the numbers are already 2-3 days stale, and the panel
+# polls every 15s. Ten minutes is faster than the data moves.
+_analytics_cache = {"t": 0, "data": None, "busy": False}
+
+# The three GitHub Actions cron slots the renderer wakes on, in Dhaka time.
+# (03:23 / 11:23 / 19:23 UTC.) Shown, not driven — the panel cannot fire them.
+RENDER_SLOTS = [(9, 23), (17, 23), (1, 23)]
+
+# the last provider-test output, so the System card can quote it without a rerun
+_last_diag = {"t": "", "text": ""}
+
+
+def _analytics_compute(vids):
+    """The actual merge. Same never-raise contract as
+    yt_analytics.video_report: a sulking Analytics API must not kill anything.
+
+    Long-form is >= 180s — the same split the daily report uses, so the panel
+    and the Telegram report never disagree about what a "long" is.
+    """
+    out = {"reason": "other", "rows": [], "formats": {}, "avg_pct": None,
+           "minutes": 0, "when": f"{datetime.now() + config.BD_OFFSET:%b %d}"}
+    try:
+        import yt_analytics
+        rep, reason = yt_analytics.video_report(days=28)
+        out["reason"] = reason or "other"
+        if rep:
+            by_id = {v.get("id"): v for v in vids}
+            rows = []
+            for vid, a in rep.items():
+                v = by_id.get(vid) or {}
+                row = {"id": vid,
+                       "title": (v.get("title") or "a deleted video")[:60],
+                       "duration_s": v.get("duration_s", 0),
+                       "views": a.get("views", 0),
+                       "minutes": round(a.get("minutes", 0)),
+                       "avg_pct": round(a.get("avg_pct", 0), 1),
+                       "subs": a.get("subs_gained", 0)}
+                if a.get("impressions") is not None:
+                    row["impressions"] = a["impressions"]
+                    row["ctr"] = round(a.get("ctr", 0) * 100, 1)
+                rows.append(row)
+            rows.sort(key=lambda r: r["avg_pct"], reverse=True)
+            out["rows"] = rows
+
+            def _fmt_sum(rs):
+                return {"n": len(rs),
+                        "avg_pct": round(sum(r["avg_pct"] for r in rs) / len(rs), 1)
+                        if rs else None,
+                        "minutes": round(sum(r["minutes"] for r in rs)),
+                        "avg_views": round(sum(r["views"] for r in rs) / len(rs))
+                        if rs else None}
+
+            out["formats"] = {
+                "longs": _fmt_sum([r for r in rows if r["duration_s"] >= 180]),
+                "shorts": _fmt_sum([r for r in rows if r["duration_s"] < 180])}
+            out["avg_pct"] = (round(sum(r["avg_pct"] for r in rows) / len(rows), 1)
+                              if rows else None)
+            out["minutes"] = round(sum(r["minutes"] for r in rows))
+    except Exception as e:
+        out["reason"] = "other"
+        comms.log(f"panel analytics snapshot failed: {str(e)[:80]}")
+    return out
+
+
+def _analytics_snapshot(vids):
+    """Serve the cached snapshot; refresh it off-thread.
+
+    Gunicorn runs one sync worker, so the poll must never sit waiting on the
+    Analytics API: the first request after the cache expires kicks a daemon
+    thread and is answered with the last snapshot (or a 'pending' placeholder
+    on a cold dyno), and the next 15s poll picks up the fresh numbers.
+    """
+    import time as _t
+    if (_t.time() - _analytics_cache["t"]) < 600 and _analytics_cache["data"]:
+        return _analytics_cache["data"]
+    if not _analytics_cache.get("busy"):
+        _analytics_cache["busy"] = True
+        vids_now = list(vids or [])
+
+        def _fill():
+            data = _analytics_compute(vids_now)
+            _analytics_cache.update(t=_t.time(), data=data, busy=False)
+        threading.Thread(target=run_safely,
+                         args=("panel: analytics snapshot", _fill),
+                         daemon=True).start()
+    return _analytics_cache["data"] or {
+        "reason": "pending", "rows": [], "formats": {}, "avg_pct": None,
+        "minutes": 0, "when": f"{datetime.now() + config.BD_OFFSET:%b %d}"}
+
+
+def _health_snapshot():
+    """Which providers and connections the agent is configured with.
+
+    Booleans and counts only — never key material, and the panel shows this
+    to visitors too, so it must stay a wiring diagram rather than a keyring.
+    """
+    return {
+        "gemini_keys": len(config.GEMINI_API_KEYS or []),
+        "groq": bool(config.GROQ_API_KEY),
+        "openrouter": bool(config.OPENROUTER_API_KEY),
+        "cloudflare": bool(config.CF_API_TOKEN and config.CF_ACCOUNT_ID),
+        "youtube": bool(config.YT_REFRESH_TOKEN and config.YT_CLIENT_ID),
+        "analytics_token": bool(config.YT_REFRESH_TOKEN),
+        "gist": bool(config.GIST_TOKEN),
+        "telegram": bool(config.TELEGRAM_BOT_TOKEN),
+        "dispatch": bool(config.GITHUB_DISPATCH_TOKEN),
+        "lastdiag": dict(_last_diag),
+    }
 
 
 @app.route("/panel")
@@ -2157,6 +2631,11 @@ def api_state():
     snap = _channel_snapshot()
     ch = snap["ch"]
     vids = snap["vids"]
+    # uploads today: the ~6/day YouTube quota makes this the number to watch
+    # while the channel is small; the published date is BD's calendar day
+    today_bd = f"{datetime.now() + config.BD_OFFSET:%Y-%m-%d}"
+    uploads_today = sum(1 for v in vids
+                        if str(v.get("published", "")).startswith(today_bd))
     hist = state.STATE.get("stats_history", [])
     # "+N today" on the Desk tiles has to actually mean today. stats_history
     # gets one row per day, written when daily_report() runs, so diffing the
@@ -2184,6 +2663,10 @@ def api_state():
             "url": p.get("video_url", ""),
             "alts": (p.get("title_alternatives") or [])[:2],
             "formats": len(p.get("video_urls") or [1]),
+            # every uploaded format's YouTube link, so the decisions cards
+            # can offer each cut for watching — urls are youtu.be pages
+            "urls": [u for u in (p.get("video_urls") or
+                                 [p.get("video_url")]) if u][:4],
         })
     replies = [{"id": uid, "draft": (r.get("draft") or "")[:400],
                 "video": (r.get("video_title") or "")[:70],
@@ -2223,13 +2706,19 @@ def api_state():
         "jobs": [{"id": j["id"], "type": j["type"], "status": j["status"],
                   "age": int((now - j.get("created", now)) / 60),
                   "title": (j.get("script", {}).get("title") or
-                            j.get("result", {}).get("msg", ""))[:60]}
+                            j.get("result", {}).get("msg", ""))[:60],
+                  "has_script": bool(j.get("script"))}
                  for j in jobs_list],
         "direction": state.STATE.get("topic_direction", ""),
         "used_topics": state.STATE.get("used_topics", [])[-25:],
         "best_hour": state.STATE.get("best_hour", 17),
         "sched": sorted(state.STATE.get("scheduler_ran", {}).keys()),
         "log": comms.LOG[-30:],
+        # the learning loop's eyes: retention per video + longs/shorts split
+        "analytics": _analytics_snapshot(vids),
+        # provider wiring (booleans only) + the last provider-test output
+        "health": _health_snapshot(),
+        "uploads_today": uploads_today,
         # newest text answer a panel button asked for (diag/chat/report)
         "out": (state.STATE.get("panel_out") or [None])[-1],
     }
@@ -2270,14 +2759,46 @@ def _panel_out(kind, text):
 
 @app.route("/api/action", methods=["POST"])
 def api_action():
+    data = request.get_json(force=True, silent=True) or {}
+    a = data.get("action", "")
+    # reading a script is the one action a visitor may take through this
+    # route: it changes nothing, and the film it describes is already
+    # visible to them on the Decisions tab. Anyone not signed in at all
+    # falls through to the walls below.
+    if a.startswith("script:") and _panel_ok():
+        state.default_state()
+        jid = a.split(":", 1)[1]
+        job = next((j for j in state.STATE.get("jobs", [])
+                    if j.get("id") == jid), None)
+        sc = (job or {}).get("script") or {}
+        if not sc:
+            return jsonify({"ok": False,
+                            "error": "no script on that job"}), 404
+        scenes = []
+        for s in (sc.get("scenes") or []):
+            scenes.append({
+                "narration": (s.get("narration") or "")[:1200],
+                "short_narration": (s.get("short_narration") or "")[:600],
+                "short_title": (s.get("short_title") or "")[:80],
+                "in_short": bool(s.get("in_short")),
+                "source": (s.get("source") or "")[:200],
+                "archive_search": (s.get("archive_search") or "")[:120],
+                "visual_keywords": (s.get("visual_keywords") or "")[:160],
+            })
+        return jsonify({"ok": True, "script": {
+            "id": sc.get("id", ""),
+            "title": (sc.get("title") or "")[:120],
+            "hook": (sc.get("hook") or "")[:600],
+            "outro": (sc.get("outro") or "")[:600],
+            "description": (sc.get("description") or "")[:900],
+            "tags": (sc.get("tags") or [])[:15],
+            "scenes": scenes}})
     # a visitor sees everything but can change nothing; the panel hides its
     # controls too, but the server is the wall
     if not _panel_admin():
         return jsonify({"ok": False,
                         "error": "read-only sign-in — ask the admin"}), 403
     state.default_state()
-    data = request.get_json(force=True, silent=True) or {}
-    a = data.get("action", "")
     import cloud
     if a == "next":
         comms.log("command: queue a video (panel)")
@@ -2426,7 +2947,11 @@ def api_action():
     if a == "diag":
         def _diag():
             import llm
-            _panel_out("diag", llm.diagnose())
+            text = llm.diagnose()
+            _panel_out("diag", text)
+            global _last_diag
+            _last_diag = {"t": f"{datetime.now() + config.BD_OFFSET:%b %d, %H:%M}",
+                          "text": str(text)[:2500]}
             comms.log("provider test finished (panel)")
         comms.log("command: test providers (panel)")
         _bg("panel: provider test", _diag)
@@ -2443,6 +2968,19 @@ def api_action():
                 ch_ = yt.channel_stats()
                 ctx = (f"Channel: {ch_['title']}, {ch_['subs']} subs, "
                        f"{ch_['views']} views, {ch_['videos']} videos. ")
+            except Exception:
+                pass
+            # retention context when the learning loop has eyes: the manager
+            # gets asked "which format is working?" more than anything else
+            try:
+                ana = _analytics_snapshot(_channel_snapshot()["vids"])
+                if ana.get("reason") == "ok" and ana.get("rows"):
+                    fm = ana.get("formats") or {}
+                    ctx += (f"Retention last 28 days: {ana.get('avg_pct')}% avg; "
+                            f"longs {fm.get('longs', {}).get('avg_pct')}% avg over "
+                            f"{fm.get('longs', {}).get('n')} videos, shorts "
+                            f"{fm.get('shorts', {}).get('avg_pct')}% avg over "
+                            f"{fm.get('shorts', {}).get('n')}. ")
             except Exception:
                 pass
             try:

@@ -2209,20 +2209,28 @@ function paintRetention(ana){
       disabled: ["Turn on the <b>YouTube Analytics API</b> in the Google Cloud project that owns the channel — console.cloud.google.com → APIs &amp; Services → Library."],
       empty: [], other: []
     }[r] || [];
+    // an "other" with a quoted error is usually a garbled env value, not a
+    // transient refusal — it needs hands, not patience
+    const steps = (r === "other" && ana.note)
+      ? ["Compare the YouTube values on Render with what the extraction script printed — a half-pasted token or a stray space is the usual cause. Re-paste the value and Render redeploys on its own."]
+      : STEPS;
     const WHY = {
       pending: "The first fetch is running off-thread — the next refresh carries the numbers.",
       scope: "The upload key was consented before analytics existed, and YouTube never extends a consent on its own. Until it is re-given, everything else keeps working — the daily report just ships without these numbers.",
       disabled: "The Analytics API is a separate switch in the same Cloud project as the upload key. Nothing is broken; the numbers are simply not being collected.",
       empty: "The API answers, but nothing has landed in the window yet — analytics runs 2–3 days behind. Give it a few days after the first public views.",
-      other: "The Analytics API refused just now. The agent keeps working and retries on every report; this section comes back on its own."
+      other: "The Analytics API refused just now. The agent keeps working and retries on every report — the note below quotes what it actually said."
     }[r] || "";
     $("retbox").innerHTML =
       '<div class="rowline" style="border:0;padding-top:0"><span class="grow" style="min-width:0">'+
         '<span class="st '+st[0]+'"><span class="dot"></span>'+st[1]+'</span></span></div>'+
-      '<div style="font-size:14px;line-height:1.6;color:var(--ink);margin-top:4px">'+WHY+'</div>';
-    $("retfmt").innerHTML = STEPS.length
+      '<div style="font-size:14px;line-height:1.6;color:var(--ink);margin-top:4px">'+WHY+'</div>'+
+      (r === "other" && ana.note
+        ? '<div style="font:12.5px/1.5 var(--sans);color:var(--muted);margin-top:10px;border-left:3px solid var(--rule);padding:2px 0 2px 10px;word-break:break-word">'+esc(ana.note)+'</div>'
+        : '');
+    $("retfmt").innerHTML = steps.length
       ? '<h3 style="font:600 17px/1.2 var(--serif);margin-bottom:2px">To turn it on</h3><ol class="steps">'+
-        STEPS.map(s => '<li>'+s+'</li>').join("")+'</ol>'
+        steps.map(s => '<li>'+s+'</li>').join("")+'</ol>'
       : '<div class="empty" style="padding:14px 0">Nothing to do — this resolves itself.</div>';
     $("rettable-card").hidden = true;
   }
@@ -2471,11 +2479,17 @@ def _analytics_compute(vids):
     and the Telegram report never disagree about what a "long" is.
     """
     out = {"reason": "other", "rows": [], "formats": {}, "avg_pct": None,
-           "minutes": 0, "when": f"{datetime.now() + config.BD_OFFSET:%b %d}"}
+           "minutes": 0, "note": "",
+           "when": f"{datetime.now() + config.BD_OFFSET:%b %d}"}
     try:
         import yt_analytics
         rep, reason = yt_analytics.video_report(days=28)
         out["reason"] = reason or "other"
+        if out["reason"] == "other":
+            # quote what the API actually said — "invalid_grant" points at a
+            # garbled env value, which the owner can fix in one re-paste
+            out["note"] = (getattr(yt_analytics, "last_error",
+                                   lambda: "")() or "")[:140]
         if rep:
             by_id = {v.get("id"): v for v in vids}
             rows = []
@@ -2538,7 +2552,8 @@ def _analytics_snapshot(vids):
                          daemon=True).start()
     return _analytics_cache["data"] or {
         "reason": "pending", "rows": [], "formats": {}, "avg_pct": None,
-        "minutes": 0, "when": f"{datetime.now() + config.BD_OFFSET:%b %d}"}
+        "minutes": 0, "note": "",
+        "when": f"{datetime.now() + config.BD_OFFSET:%b %d}"}
 
 
 def _health_snapshot():

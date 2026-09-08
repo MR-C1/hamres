@@ -186,8 +186,19 @@ def main():
         check("service-disabled classifies as disabled",
               reason == "disabled" and report == {})
 
+        # 4b. any other failure -> "other", with the text kept for the
+        # panel to quote (a garbled env value says what Google said)
+        yta = reset_module()
+        REFRESH_ERROR[0] = RuntimeError(
+            "invalid_grant: Token has been expired or revoked.")
+        report, reason = yta.video_report(days=28)
+        check("other failures keep their text for the panel",
+              reason == "other" and report == {}
+              and yta.last_error().startswith("invalid_grant"))
+
         # 5. works but no rows -> "empty"
         yta = reset_module()
+        REFRESH_ERROR[0] = None
         QUERY_RESPONSES[:] = [{"columnHeaders": [{"name": "video"}],
                                "rows": []}]
         QUERY_ERRORS[:] = []

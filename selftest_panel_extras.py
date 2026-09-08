@@ -175,7 +175,7 @@ def main():
           d["pending"][0]["urls"], ["https://youtu.be/abc", "https://youtu.be/def"])
     check("analytics shape",
           sorted(d["analytics"].keys()),
-          ["avg_pct", "formats", "minutes", "reason", "rows", "when"])
+          ["avg_pct", "formats", "minutes", "note", "reason", "rows", "when"])
     check("analytics reason is a known word",
           d["analytics"]["reason"] in ("ok", "pending", "empty", "scope",
                                        "disabled", "other"), True)
@@ -277,6 +277,24 @@ def main():
     out = appmod._analytics_compute(vids)
     check("scope reason survives the merge", out["reason"], "scope")
     check("scope leaves rows empty", out["rows"], [])
+    check("scope leaves no note", out["note"], "")
+
+    class FakeOther:
+        @staticmethod
+        def video_report(days=28):
+            return {}, "other"
+        @staticmethod
+        def last_error():
+            return ("invalid_client: The OAuth client was not found. "
+                    "way past one hundred and forty characters so the "
+                    "panel has to cap it somewhere reasonable ok")
+    sys.modules["yt_analytics"] = FakeOther
+    out = appmod._analytics_compute(vids)
+    check("other keeps its reason", out["reason"], "other")
+    check("other quotes the provider's error",
+          out["note"].startswith("invalid_client: The OAuth client was not found."),
+          True)
+    check("the quote is capped at 140", len(out["note"]), 140)
 
     # ---- _analytics_snapshot: never blocks, fills off-thread, caches ----
     calls = {"n": 0}

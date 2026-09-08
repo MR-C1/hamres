@@ -52,9 +52,20 @@ def get_service():
     return _service
 
 
+_last_error = ""
+
+
+def last_error():
+    """The text behind the most recent 'other' — for the panel to quote,
+    so a garbled env value says what Google actually said."""
+    return _last_error
+
+
 def _classify(e):
     """Turn any failure into the owner-action reason."""
+    global _last_error
     msg = str(e)
+    _last_error = msg[:160]
     if "invalid_scope" in msg or "insufficient" in msg.lower():
         return "scope"
     if "has not been used" in msg or "is disabled" in msg \

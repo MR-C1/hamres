@@ -12,6 +12,7 @@ Auto:  run_worker.bat registered at logon (see SETUP_AGENT.md)
 """
 
 import os
+import re
 import shutil
 import sys
 import time
@@ -123,6 +124,13 @@ def do_render(job):
     if up.get("video_url"):
         sent = send_video_preview(short, approval_id, script["title"],
                                   url=up.get("video_url"))
+        # each standalone scene-Short gets its own preview + buttons
+        # (the buttons act on the whole approval entry either way)
+        for p in sorted(REVIEW.glob(f"{sid}_xshort*.mp4")):
+            send_video_preview(p, approval_id,
+                               up.get("titles", {}).get(p.name,
+                                                        script["title"]),
+                               url=up.get("video_url"))
         if long_v.exists() and long_v.stat().st_size < 45 << 20:
             # send long-form too, same approval buttons
             send_video_preview(long_v, approval_id, script["title"],
@@ -204,6 +212,36 @@ def _enrich_meta(script, meta):
     return meta
 
 
+def _short_title(scene, script_title):
+    """A standalone scene-Short's own YouTube title.
+
+    Best: the brain's per-scene short_title (written as a curiosity gap
+    that works out of context). Fallback: the first sentence of the
+    scene's short narration, trimmed to a Shorts-card length. Distinct
+    from every other title in the batch — the duplicate guard matches on
+    title + duration bucket and ALL shorts share the <3min bucket, so a
+    repeated title would make one Short look like a re-upload of
+    another.
+    """
+    text = (scene.get("short_title") or scene.get("short_narration")
+            or scene.get("narration") or "").strip()
+    first = re.split(r"(?<=[.!?])\s+", text)[0].strip() if text else ""
+    words = first.rstrip(" .!?…\"'").split()
+    if not words:
+        return script_title[:70]
+    # accumulate whole words while they fit a Shorts card
+    keep = []
+    for wd in words[:10]:
+        if len(" ".join(keep + [wd])) > 80:
+            break
+        keep.append(wd)
+    if not keep:                       # one monster word
+        return words[0][:77] + "…"
+    title = " ".join(keep)
+    # ellipsis only when the sentence actually continued past the cut
+    return title if len(keep) == len(words) else title + "…"
+
+
 def _upload_files(script, sid):
     import upload
     meta = {"title": script["title"],
@@ -215,17 +253,44 @@ def _upload_files(script, sid):
         meta.update({k: v for k, v in parsed.items() if v})
     _enrich_meta(script, meta)
 
-    urls, errors = [], []
+    # upload order: hook-Short, scene-Shorts, long-form. Every short
+    # carries its OWN title (see _short_title) so the duplicate guard
+    # can't confuse one script's shorts with each other.
+    files = [(f"{sid}_short.mp4", script["title"])]
+    for p in sorted(REVIEW.glob(f"{sid}_xshort*.mp4")):
+        idx_txt = p.stem.split("xshort")[-1].split("_")[0]
+        scene = (script["scenes"][int(idx_txt)]
+                 if idx_txt.isdigit() and int(idx_txt) < len(script["scenes"])
+                 else {})
+        files.append((p.name, _short_title(scene, script["title"])))
+    files.append((f"{sid}_long.mp4", script["title"]))
+    # the long and the hook-Short share the script title (the duplicate
+    # guard separates them by duration bucket); every OTHER title in
+    # the batch must be unique or it gets a part number — never a
+    # silent duplicate
+    used = set()
+    for i, (name, title) in enumerate(files):
+        primary = name in (f"{sid}_short.mp4", f"{sid}_long.mp4")
+        t, n = title, 2
+        while t in used and not (primary and t == script["title"]):
+            t = f"{title} — Part {n}"
+            n += 1
+        used.add(t)
+        files[i] = (name, t)
+
+    urls, errors, titles = [], [], {}
     # the duplicate-guard tells SHORT and LONG apart by duration bucket
-    for name in (f"{sid}_short.mp4", f"{sid}_long.mp4"):
+    for name, title in files:
         f = REVIEW / name
         if not f.exists():
             continue
+        m = dict(meta, title=title)
+        titles[name] = title
         try:
             url = upload.upload_video(
-                f, meta, CFG, want_short=name.endswith("_short.mp4"))
+                f, m, CFG, want_short="short" in name)
             urls.append(url)
-            log.info("uploaded %s -> %s", f.name, url)
+            log.info("uploaded %s (%s) -> %s", f.name, title, url)
         except Exception as e:
             # one format failing must not kill the other: a partial
             # upload still gets a pending entry + working buttons, and
@@ -249,6 +314,7 @@ def _upload_files(script, sid):
     return {"video_url": urls[0] if urls else "",
             "video_urls": urls,
             "title": script["title"] if urls else "",
+            "titles": titles,
             "msg": msg}
 
 
@@ -262,6 +328,9 @@ def _cleanup_files(sid):
                     f"{sid}_longTEMP_MPY_wvf_snd.*",
                     # per-block intermediates from the segmented renderer
                     f"{sid}_short_*.mp4", f"{sid}_long_*.mp4",
+                    # standalone scene-Shorts: finals AND their blocks
+                    # ({sid}_xshort{n}.mp4, {sid}_xshort{n}_00_*.mp4)
+                    f"{sid}_xshort*.mp4",
                     f"{sid}_*.blocks.txt"):
         for p in REVIEW.glob(pattern):
             try:

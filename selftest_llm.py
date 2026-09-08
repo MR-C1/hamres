@@ -121,6 +121,79 @@ def main():
         cf_line = next((l for l in lines if "cloudflare" in l), "")
         check("diagnose hints at the missing account id",
               "CF_ACCOUNT_ID missing" in cf_line)
+
+        # 6. search_complete: no gemini keys -> groq compound answers
+        CALLS.clear()
+        llm._key_cooldown.clear()
+        reset(GEMINI_API_KEY="", GEMINI_API_KEYS=[], GROQ_API_KEY="groqk",
+              GROQ_SEARCH_MODEL="groq/compound")
+        out = llm.search_complete("research this")
+        check("search falls to groq without gemini keys", out == "ANSWER")
+        gq = [c for c in CALLS if "api.groq.com" in c["url"]]
+        check("search fallback hits groq /chat/completions",
+              gq and gq[0]["url"]
+              == "https://api.groq.com/openai/v1/chat/completions")
+        check("search fallback model is the compound system",
+              gq and gq[0]["json"].get("model") == "groq/compound")
+
+        # 7. search_complete: every gemini key 429s -> still groq compound
+        import types
+        fake_google = types.ModuleType("google")
+        fake_genai = types.ModuleType("google.genai")
+
+        class QuotaErr(Exception):
+            pass
+
+        class FakeModels:
+            def generate_content(self, model, contents, config=None):
+                raise QuotaErr("429 RESOURCE_EXHAUSTED quota")
+
+        class FakeClient:
+            def __init__(self, api_key=None):
+                pass
+
+            models = FakeModels()
+
+        fake_genai.Client = FakeClient
+        fake_google.genai = fake_genai
+        real_google = sys.modules.get("google")
+        sys.modules["google"] = fake_google
+        sys.modules["google.genai"] = fake_genai
+        try:
+            CALLS.clear()
+            llm._key_cooldown.clear()
+            reset(GEMINI_API_KEY="gk1", GEMINI_API_KEYS=["gk1"],
+                  GROQ_API_KEY="groqk", GROQ_SEARCH_MODEL="groq/compound")
+            out = llm.search_complete("research this")
+            check("gemini 429s -> search still answers via groq",
+                  out == "ANSWER")
+            check("quota-hit gemini key got a cooldown",
+                  llm._key_cooldown.get("gk1", 0) > 0)
+        finally:
+            if real_google is None:
+                sys.modules.pop("google", None)
+                sys.modules.pop("google.genai", None)
+            else:
+                sys.modules["google"] = real_google
+            llm._key_cooldown.clear()
+
+        # 8. search_complete: nothing configured / everything dead
+        CALLS.clear()
+        reset(GEMINI_API_KEY="", GEMINI_API_KEYS=[], GROQ_API_KEY="")
+        try:
+            llm.search_complete("research this")
+            check("no search provider -> clean error", False)
+        except RuntimeError as e:
+            check("no search provider -> clean error",
+                  "no search provider" in str(e))
+        reset(GROQ_API_KEY="groqk")
+        llm.requests.post = lambda *a, **k: FakeResp(500, "groq down")
+        try:
+            llm.search_complete("research this")
+            check("all search providers dead -> raises", False)
+        except RuntimeError as e:
+            check("all search providers dead -> raises",
+                  "search grounding failed" in str(e))
     finally:
         llm.requests.post = orig_post
 

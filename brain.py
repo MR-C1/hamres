@@ -45,6 +45,7 @@ SCRIPT_PROMPT = """Write ONE video script for a faceless YouTube facts/mystery c
   "scenes": [
     {{"narration": "90-140 words, conversational, fast, surprising.",
       "short_narration": "ONLY on in_short scenes: 40-60 words — the scene's punchiest core, rewritten tight for the Short",
+      "short_title": "ONLY on in_short scenes: a standalone Short title for just this scene — under 60 chars, curiosity gap, works with zero context",
       "archive_search": ["2-4 real-world archival photo searches"],
       "visual_keywords": ["2-3 stock-footage search phrases (fallback)"],
       "source": "short real citation anchoring this scene's central fact",
@@ -63,8 +64,10 @@ STRUCTURE (this is a mini-documentary, not a list of facts):
 - The question from the hook must appear in the first 10% of the narration;
   the resolution/payoff appears ONLY in the final 20%. Everything between
   escalates.
-- Mark the 3 most visual scenes "in_short": true. All facts true, verifiable,
-  and specific (dates, numbers, names).
+- Mark the 4 most visual scenes "in_short": true. Each in_short scene
+  becomes BOTH part of the main Short and, if unused there, its own
+  standalone Short (that's what short_title is for). All facts true,
+  verifiable, and specific (dates, numbers, names).
 - ARCHIVAL (this is a DOCUMENTARY — real material MUST dominate):
   every scene names 2-4 real searchable subjects in "archive_search" —
   exact names of the people, places, objects, documents, maps or

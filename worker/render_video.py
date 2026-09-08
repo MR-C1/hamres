@@ -396,7 +396,7 @@ def _mark_layer(w, h, fmt, duration):
     mark = (ImageClip(str(_asterisk_mark(int(w * 0.045))))
             .with_start(0).with_duration(duration))
     return mark.with_position((w - int(w * 0.045) - int(w * 0.025),
-                               int(h * 0.03) if fmt == "short"
+                               int(h * 0.03) if "short" in fmt
                                else h - int(w * 0.045) - int(h * 0.04)))
 
 
@@ -466,12 +466,54 @@ def pick_scenes(script, fmt, audio_durations):
                     total += d
         return [("hookshort", {"narration": short_hook_text(script),
                                 "visual_keywords": hook_visuals})] + chosen
+    elif fmt.startswith("xshort"):
+        # a STANDALONE scene-Short: one scene's short_narration as its
+        # own complete vertical video (see pick_extra_shorts)
+        idx = int(fmt[len("xshort"):])
+        return [(f"shortscene{idx}", scenes[idx])]
     else:
         blocks += [(f"scene{i}", s) for i, s in enumerate(scenes)]
         if script.get("outro"):
             blocks.append(("outro", {"narration": script["outro"],
                                      "visual_keywords": []}))
         return blocks
+
+
+def pick_extra_shorts(script, audio_durations, count):
+    """Which scenes become STANDALONE scene-Shorts ("xshort{n}" formats).
+
+    One script's products used to be one hook-Short + the long-form;
+    now each in_short scene that did NOT make it into the main Short can
+    ship as its own vertical video — one video becomes several shelf
+    products from the same render budget (the TTS is already paid for).
+
+    Constraints that keep this safe:
+    - only scenes with a short_narration qualify (a full 30-40s scene
+      narration is too long for a standalone Short);
+    - scenes already inside the main Short are excluded — the same audio
+      shipping twice on one channel reads as duplicate content;
+    - `count` is capped by config so the YouTube upload quota
+      (10,000 API units/day, videos.insert = 1,600) is never blown by
+      default: 1 long + 1 hook-Short + 1 scene-Short = 3 uploads per
+      script, ~6/day at two scripts.
+    Returns [(scene_index, scene_dict)].
+    """
+    if count <= 0:
+        return []
+    in_main = {bid for bid, _ in pick_scenes(script, "short",
+                                             audio_durations)}
+    out = []
+    for idx, s in enumerate(script["scenes"]):
+        if not (s.get("short_narration") or "").strip():
+            continue
+        if not s.get("in_short", True):
+            continue
+        if f"shortscene{idx}" in in_main:
+            continue
+        out.append((idx, s))
+        if len(out) >= count:
+            break
+    return out
 
 
 def music_track(total_duration, volume):
@@ -547,11 +589,25 @@ def render_from_dict(script, config):
     outputs = []
     credits = []      # archival attributions for the description
     blocks_long = []  # long-form scene order, for the description chapters
-    for fmt, w, h in [("short", rconf["short_width"], rconf["short_height"]),
-                      ("long", rconf["long_width"], rconf["long_height"])]:
+    # formats: the hook-Short, the long-form, then one STANDALONE
+    # scene-Short per pick_extra_shorts pick ("xshort{scene_index}").
+    # render.shorts_per_video caps them (default 1 — see pick_extra_shorts
+    # for the upload-quota arithmetic).
+    extra_shorts = pick_extra_shorts(
+        script, durations, int(rconf.get("shorts_per_video", 1)))
+    formats = [("short", rconf["short_width"], rconf["short_height"]),
+               ("long", rconf["long_width"], rconf["long_height"])]
+    for idx, _s in extra_shorts:
+        formats.append((f"xshort{idx}", rconf["short_width"],
+                        rconf["short_height"]))
+    if extra_shorts:
+        log.info("extra scene-shorts: %s",
+                 ", ".join(f"scene {i}" for i, _ in extra_shorts))
+    for fmt, w, h in formats:
         blocks = pick_scenes(script, fmt, durations)
         if fmt == "long":
             blocks_long = blocks
+        portrait = "short" in fmt  # hook-Short and scene-Shorts alike
 
         # RESUME: a format whose output already exists and fully decodes
         # is never re-rendered — a minute-35 crash used to redo both
@@ -569,7 +625,7 @@ def render_from_dict(script, config):
             for kw in s.get("visual_keywords", []):
                 if kw not in keyword_clips:
                     keyword_clips[kw] = visuals.fetch_clips(
-                        kw, "portrait" if fmt == "short" else "landscape",
+                        kw, "portrait" if portrait else "landscape",
                         keys, max_clips)
 
         # 3) PER-BLOCK assembly + render. The old code built ONE
@@ -659,8 +715,8 @@ def render_from_dict(script, config):
             shown, readers = [], []
             visual = montage(sources, d, w, h,
                              label=kws[0] if kws else "",
-                             motion=(fmt == "short"),
-                             shot=2.6 if fmt == "short" else 3.4,
+                             motion=portrait,
+                             shot=2.6 if portrait else 3.4,
                              used=shown, readers=readers)
             for p in shown:
                 if p in by_path and by_path[p] not in credits:

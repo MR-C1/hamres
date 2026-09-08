@@ -28,6 +28,9 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")  # console.groq.com
 # gpt-oss-120b: the free-plan workhorse (old Llama chat models
 # went enterprise-only on Groq's free tier)
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
+# groq's compound models search the web server-side (250 req/day free) —
+# the fallback when every Gemini key's search grounding is over quota
+GROQ_SEARCH_MODEL = os.environ.get("GROQ_SEARCH_MODEL", "groq/compound")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")  # openrouter.ai
 # nemotron-3-ultra-550b:free — biggest currently-free model (1M ctx,
 # verified live Sept 2026; free models rotate — check openrouter.ai/models

@@ -102,33 +102,51 @@ def search_complete(prompt, system=None, max_tokens=4000):
     """Gemini WITH google_search grounding — the model searches the live
     web and answers with real sources. Used for the research pass before
     scripting: facts arrive grounded instead of from model memory.
-    (Free tier: search grounding ~500 requests/day, verified.)"""
+
+    Grounding is the flakiest free-tier Gemini feature (429s constantly),
+    so Groq's compound models — which run their own server-side web
+    search and answer with citations — are the fallback. Research never
+    dies just because every Gemini key is over quota."""
     from google import genai
-    if not config.GEMINI_API_KEYS:
-        raise RuntimeError("no gemini key for search grounding")
     last_err = None
-    for key in _gemini_keys():
-        client = genai.Client(api_key=key)
-        for model in GEMINI_MODELS:
-            try:
-                cfg = {"max_output_tokens": max_tokens,
-                       "tools": [{"google_search": {}}]}
-                if system:
-                    cfg["system_instruction"] = system
-                r = client.models.generate_content(model=model,
-                                                   contents=prompt, config=cfg)
-                text = (r.text or "").strip()
-                if text:
-                    return text
-            except Exception as e:
-                msg = str(e)
-                last_err = e
-                if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
-                    _key_cooldown[key] = _time.time() + 1800
-                    comms.log(f"gemini-search key ...{key[-6:]} quota-hit — "
-                              f"rotating to next key")
-                    break
-                comms.log(f"gemini-search {model} failed: {msg[:80]}")
+    if config.GEMINI_API_KEYS:
+        for key in _gemini_keys():
+            client = genai.Client(api_key=key)
+            for model in GEMINI_MODELS:
+                try:
+                    cfg = {"max_output_tokens": max_tokens,
+                           "tools": [{"google_search": {}}]}
+                    if system:
+                        cfg["system_instruction"] = system
+                    r = client.models.generate_content(model=model,
+                                                       contents=prompt, config=cfg)
+                    text = (r.text or "").strip()
+                    if text:
+                        return text
+                except Exception as e:
+                    msg = str(e)
+                    last_err = e
+                    if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
+                        _key_cooldown[key] = _time.time() + 1800
+                        comms.log(f"gemini-search key ...{key[-6:]} quota-hit — "
+                                  f"rotating to next key")
+                        break
+                    comms.log(f"gemini-search {model} failed: {msg[:80]}")
+    if config.GROQ_API_KEY:
+        try:
+            text = _openai_compatible(
+                "https://api.groq.com/openai", config.GROQ_API_KEY,
+                config.GROQ_SEARCH_MODEL, prompt, system, max_tokens)
+            comms.log(f"search fallback used: groq "
+                      f"({config.GROQ_SEARCH_MODEL}, web search)")
+            return text
+        except Exception as e:
+            last_err = e
+            comms.log(f"groq-search {config.GROQ_SEARCH_MODEL} failed: "
+                      f"{str(e)[:80]}")
+    if last_err is None:
+        raise RuntimeError("no search provider configured "
+                           "(need GEMINI_API_KEY or GROQ_API_KEY)")
     raise RuntimeError(f"search grounding failed: {last_err}")
 
 

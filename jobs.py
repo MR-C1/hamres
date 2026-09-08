@@ -47,6 +47,13 @@ def _cost_minutes(job):
                  for s in script.get("scenes", []))
     words += len(script.get("outro", "").split())
     duration_min = words / 150
+    # standalone scene-Shorts (render_video.pick_extra_shorts): each is
+    # one ~25s vertical block + concat + loudnorm that the narration
+    # total above never sees (~7 worker-minutes apiece)
+    n_shorts = sum(1 for s in script.get("scenes", [])
+                   if (s.get("short_narration") or "").strip()
+                   and s.get("in_short", True))
+    duration_min += 0.5 * min(n_shorts, 2)
     return duration_min * 13 + 3  # +3 for TTS/downloads/warmup
 
 

@@ -29,10 +29,11 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")  # console.groq.com
 # went enterprise-only on Groq's free tier)
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")  # openrouter.ai
-# glm-5.2:free — frontier-class, 256K ctx, 50 req/day free (verified
-# Sept 2026; free models rotate — check openrouter.ai/models when stale)
+# nemotron-3-ultra-550b:free — biggest currently-free model (1M ctx,
+# verified live Sept 2026; free models rotate — check openrouter.ai/models
+# when stale, minimax-m3:free already 404'd)
 OPENROUTER_MODEL = os.environ.get(
-    "OPENROUTER_MODEL", "z-ai/glm-5.2:free")
+    "OPENROUTER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
 
 # Cloudflare Workers AI — the last safety net (10K neurons/day free).
 # The endpoint is per-account, so it needs BOTH the API token and the

@@ -53,3 +53,12 @@ GITHUB_DISPATCH_TOKEN = os.environ.get("GITHUB_DISPATCH_TOKEN", "")
 BD_OFFSET = timedelta(hours=6)  # Render's clock is UTC; Bangladesh is UTC+6
 
 CHANNEL_NAME = os.environ.get("CHANNEL_NAME", "Mind Unfold")
+
+# Panel logins. The repo is PUBLIC, so the passwords live in the Render env
+# and never in code: PANEL_ADMIN_PASSWORD / PANEL_VISITOR_PASSWORD.
+# Usernames are fixed — "admin" (full control) and "visitor" (read-only:
+# every page visible, every mutation refused). With neither password set
+# the panel stays open exactly as before, so a lost env var can never lock
+# the owner out of their own desk.
+PANEL_ADMIN_PASSWORD = os.environ.get("PANEL_ADMIN_PASSWORD", "")
+PANEL_VISITOR_PASSWORD = os.environ.get("PANEL_VISITOR_PASSWORD", "")

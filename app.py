@@ -6,13 +6,14 @@ scheduler, slash commands, and approval buttons. Intelligence lives in
 brain.py; YouTube access in yt.py; jobs in jobs.py.
 """
 
+import os
 import re
 import threading
 import time
 from datetime import datetime, timedelta
 
 import requests
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, make_response, redirect, request
 
 import brain
 import comms
@@ -184,13 +185,130 @@ def video_admin():
 
 import hashlib as _hashlib
 
+# ---------------------------------------------------------------------------
+# panel sign-in (admin = full control, visitor = read-only)
+# ---------------------------------------------------------------------------
+# Passwords come from PANEL_ADMIN_PASSWORD / PANEL_VISITOR_PASSWORD in the
+# Render env — the repo is public, so they are never written into code. With
+# neither set the panel stays open exactly as it always was: a missing env
+# var can never lock the owner out of their own desk.
+
+PANEL_COOKIE = "panel_role"
+# the cookie value is role|signature: a signed token, not the bare word
+# "admin", so a visitor cannot hand-edit their cookie into admin
+PANEL_SESSION_SECRET = os.environ.get("PANEL_SESSION_SECRET",
+                                      config.WORKER_SECRET)
+
+
+def _sign(role):
+    """HMAC of the role with the session secret. Splitting role and signature
+    with a ':' is safe — the role is one of two fixed words, never signed
+    input, and _verify rejects anything before the ':' that isn't."""
+    msg = role.encode()
+    return _hashlib.sha256(
+        PANEL_SESSION_SECRET.encode()).hexdigest()[:16]
+
+
+def _panel_role():
+    """'admin' | 'visitor' from a validly-signed cookie, else None."""
+    tok = request.cookies.get(PANEL_COOKIE, "")
+    if not tok or ":" not in tok:
+        return None
+    role, sig = tok.split(":", 1)
+    if role not in ("admin", "visitor"):
+        return None
+    return role if sig == _sign(role) else None
+
+
+def _panel_auth_enabled():
+    return bool(config.PANEL_ADMIN_PASSWORD or
+                config.PANEL_VISITOR_PASSWORD)
+
+
 def _panel_ok():
-    """Open panel (owner choice: no password). OBSERVE: this makes the
-    /api/state and /api/action routes publicly reachable by anyone who
-    knows the URL — publish/delete are exposed. The URL is unguessable
-    enough for the owner's risk tolerance; revert this function to the
-    cookie check if that changes."""
-    return True
+    """True when the requester may see the panel.
+
+    Auth off (no passwords in env): open as before — the owner's original
+    choice, and the safe fallback if the env vars are lost. Auth on: any
+    valid session may READ (visitors see everything); only 'admin' may
+    ACT, which api_action enforces separately."""
+    if not _panel_auth_enabled():
+        return True
+    return _panel_role() is not None
+
+
+def _panel_admin():
+    """True only for an admin session (or auth-off, which is owner-open)."""
+    if not _panel_auth_enabled():
+        return True
+    return _panel_role() == "admin"
+
+
+# the sign-in page: one quiet card, FOOTNOTE-branded, no hint about which
+# accounts exist (the wrong door is the same door)
+LOGIN_HTML = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FOOTNOTE — sign in</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#faf6ee; --card:#fffdf6;
+  --ink:#14141e; --muted:#5c5a4f; --dim:#8a8574;
+  --rule:#e0d9c6; --red:#b21818; --red-dark:#8f1414;
+  --serif:'Newsreader',Georgia,serif;
+  --sans:'IBM Plex Sans',system-ui,sans-serif;
+  --rad:2px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%}
+body{background:var(--paper);color:var(--ink);font:15px/1.55 var(--sans);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+.lwrap{width:100%;max-width:340px;text-align:center}
+.star{width:34px;height:34px;margin:0 auto 14px;display:block}
+.star .spokes{stroke:var(--red);stroke-width:2.4;stroke-linecap:round}
+h1{font:600 34px/1 var(--serif);letter-spacing:.01em}
+.tag{font:italic 400 15px/1 var(--serif);color:var(--muted);margin-top:6px}
+form{background:var(--card);border:1px solid var(--rule);border-radius:var(--rad);padding:22px 20px;margin-top:22px;text-align:left}
+label{display:block;font-size:13.5px;color:var(--muted);margin-bottom:6px}
+input{width:100%;background:var(--paper);border:1px solid var(--rule);border-radius:var(--rad);padding:10px 12px;font:15px var(--sans);color:var(--ink);min-height:42px}
+input:focus{border-color:var(--ink);outline:none}
+input:focus-visible{outline:2px solid var(--red);outline-offset:0}
+.field{margin-bottom:14px}
+button{display:inline-flex;align-items:center;justify-content:center;width:100%;background:var(--red);border:1px solid var(--red-dark);color:#faf6ee;border-radius:var(--rad);padding:10px 16px;min-height:42px;font:500 15px var(--sans);cursor:pointer;margin-top:4px}
+button:hover{background:var(--red-dark)}
+.err{border:1px solid var(--red);border-left-width:4px;background:#fdf1f1;color:var(--ink);padding:10px 12px;border-radius:var(--rad);margin-bottom:14px;font-size:14px}
+.note{font-size:12.5px;color:var(--muted);margin-top:14px}
+</style>
+</head>
+<body>
+<div class="lwrap">
+  <svg class="star" viewBox="0 0 24 24" aria-hidden="true">
+    <g class="spokes"><path d="M12 2v20M3.3 7l17.4 10M20.7 7L3.3 17"/></g>
+  </svg>
+  <h1>FOOTNOTE</h1>
+  <p class="tag">production desk</p>
+  <form method="post" action="/panel/login">
+    <div class="field">
+      <label for="luser">Username</label>
+      <input id="luser" name="user" autocomplete="username" required autofocus>
+    </div>
+    <div class="field">
+      <label for="lpass">Password</label>
+      <input id="lpass" name="password" type="password" autocomplete="current-password" required>
+    </div>
+    <div class="err" hidden>@@ERROR@@</div>
+    <button type="submit">Sign in</button>
+    <p class="note">The wrong door is the same door here — the desk answers
+    nothing until the sign-in is right.</p>
+  </form>
+</div>
+</body>
+</html>
+"""
 
 
 PANEL_HTML = r"""<!doctype html>
@@ -502,6 +620,16 @@ input:focus-visible{outline:2px solid var(--red);outline-offset:0}
 /* ---- flash on data change ---- */
 @keyframes flash{0%{background:var(--wash)}100%{background:var(--card)}}
 .flash{animation:flash 1s ease-out}
+
+/* ---- visitor login: see everything, touch nothing ----------------------------
+   The server refuses every mutation from a visitor session; this is the honest
+   presentation of that fact — the controls are gone rather than present and
+   broken, and the fields that save (guidance, settings) read back as text. */
+body[data-role="visitor"] [data-act]{display:none!important}
+body[data-role="visitor"] textarea,
+body[data-role="visitor"] .field input{pointer-events:none;background:var(--wash);color:var(--muted)}
+.rolebadge{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--rule);border-radius:999px;padding:2px 10px;font-size:12.5px;color:var(--muted)}
+.rolebadge .dot{width:7px;height:7px;border-radius:50%;background:var(--amber)}
 @media (prefers-reduced-motion:reduce){
   .mast-star.live .spokes,.st-render .dot{animation:none}
   /* the ring stays as a static mark; the "Working…" label is what carries it */
@@ -529,6 +657,8 @@ input:focus-visible{outline:2px solid var(--red);outline-offset:0}
     <!-- a paused agent makes nothing at all; that cannot live only in a tile subtitle
          about auto-approve and a button label at the foot of the page -->
     <span class="pausedflag" id="pausedflag" hidden>agent paused</span>
+    <span class="rolebadge" id="rolebadge" hidden><span class="dot"></span>visitor · read-only</span>
+    <a class="linkbtn" href="/panel/logout" id="signout">Sign out</a>
     <button id="refresh"></button>
   </div>
 </header>
@@ -789,6 +919,12 @@ input:focus-visible{outline:2px solid var(--red);outline-offset:0}
 <script>
 let DATA=null, PAUSED=false, LAST={};
 const $ = id => document.getElementById(id);
+/* the server stamps the signed-in role on the page; a visitor sees everything
+   but every mutation is refused server-side — CSS removes the dead controls,
+   this guard keeps any straggler from even trying */
+const ROLE = (document.querySelector('meta[name="panel-role"]') || {}).content || "open";
+const READONLY = ROLE === "visitor";
+if (READONLY) document.body.setAttribute("data-role", "visitor");
 const esc = s => String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
 /* the render pipeline supplies these urls; only http(s) may become a live href, and
    an empty one is not a link at all rather than an href="" that reloads the panel */
@@ -929,6 +1065,7 @@ function busyOff(btn){
 
 async function act(a, btn, extra){
   const head = HEAD(a);
+  if (READONLY) { toast("Read-only sign-in — a visitor can watch, not act.", true); return false; }
   if (btn && btn.dataset.busy) return false;            /* no double-fire */
   const label = busyOn(btn, BUSY[head] || "Working…") || head;
   jlog("panel", "I clicked: " + label);
@@ -1248,6 +1385,12 @@ function countUp(){
 /* ---- render ---- */
 function render(){
   const d = DATA;
+  /* the role badge: visitors carry it in the masthead so the missing buttons
+     read as policy, not as a broken panel */
+  const rb = $("rolebadge");
+  if (rb) rb.hidden = !READONLY;
+  const so = $("signout");
+  if (so) so.hidden = ROLE === "open";
   /* heartbeat */
   const led = $("beatled"), m = d.worker.mins_ago;
   let cls = "bad", txt = "worker never seen";
@@ -1946,11 +2089,60 @@ def _channel_snapshot():
 
 @app.route("/panel")
 def panel():
-    return PANEL_HTML
+    if not _panel_ok():
+        return redirect("/panel/login")
+    role = _panel_role() or "open"
+    # the page learns its role from this stamp; 'open' is the auth-off panel
+    html = PANEL_HTML.replace(
+        '<meta name="viewport" content="width=device-width,initial-scale=1">',
+        '<meta name="viewport" content="width=device-width,initial-scale=1">\n'
+        f'<meta name="panel-role" content="{role}">', 1)
+    return html
+
+
+@app.route("/panel/login", methods=["GET", "POST"])
+def panel_login():
+    if not _panel_auth_enabled():
+        # nothing to sign in to — straight to the desk
+        return redirect("/panel")
+    if request.method == "GET":
+        return LOGIN_HTML
+    user = (request.form.get("user") or "").strip().lower()
+    password = request.form.get("password") or ""
+    role = None
+    if user == "admin" and config.PANEL_ADMIN_PASSWORD \
+            and password == config.PANEL_ADMIN_PASSWORD:
+        role = "admin"
+    elif user == "visitor" and config.PANEL_VISITOR_PASSWORD \
+            and password == config.PANEL_VISITOR_PASSWORD:
+        role = "visitor"
+    if role is None:
+        comms.log(f"panel sign-in refused for '{user[:20]}'")
+        # constant-shape answer: no hint about which name was close
+        return LOGIN_HTML.replace(
+            "@@ERROR@@", "That sign-in didn't work. Try again.")
+    resp = make_response(redirect("/panel"))
+    # 30 days: this is a desk, not a bank — and the cookie is a signed role
+    # word, nothing that grants anything on its own
+    resp.set_cookie(PANEL_COOKIE, f"{role}:{_sign(role)}",
+                    max_age=30 * 86400, httponly=True, samesite="Lax")
+    comms.log(f"panel signed in as {role}")
+    return resp
+
+
+@app.route("/panel/logout")
+def panel_logout():
+    resp = make_response(redirect("/panel/login"))
+    resp.set_cookie(PANEL_COOKIE, "", max_age=0)
+    return resp
 
 
 @app.route("/api/state")
 def api_state():
+    if not _panel_ok():
+        # the API backs the panel page; a reader the page would not show
+        # itself to gets nothing from the API either
+        return jsonify({"ok": False, "error": "sign in at /panel"}), 403
     state.default_state()
     import time as _t
     w = state.STATE.get("worker", {})
@@ -2078,6 +2270,11 @@ def _panel_out(kind, text):
 
 @app.route("/api/action", methods=["POST"])
 def api_action():
+    # a visitor sees everything but can change nothing; the panel hides its
+    # controls too, but the server is the wall
+    if not _panel_admin():
+        return jsonify({"ok": False,
+                        "error": "read-only sign-in — ask the admin"}), 403
     state.default_state()
     data = request.get_json(force=True, silent=True) or {}
     a = data.get("action", "")

@@ -1,9 +1,15 @@
 """LLM layer — one entry point, complete(), with a multi-provider
-fallback chain: Gemini (native) → Groq → OpenRouter (OpenAI-compatible).
+fallback chain: Gemini (native) → Groq → OpenRouter → Cloudflare
+Workers AI (all OpenAI-compatible after Gemini).
 
-Gemini is primary (script quality on free tier). Groq and OpenRouter are
-optional safety nets — add their free keys on Render and the chain uses
-them automatically whenever Gemini is down or overloaded.
+Gemini is primary (script quality on free tier). The rest are optional
+safety nets — add their free keys on Render and the chain uses them
+automatically whenever the provider above is down or over quota.
+Cloudflare sits last: its models are the weakest of the four and its
+free 10K neurons/day go furthest when it only fires in a true
+everything-else-is-down emergency. It needs both CF_API_TOKEN and
+CF_ACCOUNT_ID (the endpoint is per-account) — with either missing the
+chain skips it.
 """
 
 import requests
@@ -126,8 +132,16 @@ def search_complete(prompt, system=None, max_tokens=4000):
     raise RuntimeError(f"search grounding failed: {last_err}")
 
 
+def _cf_base():
+    """Workers AI's OpenAI-compatible base — account-id is part of the
+    path, so this is only valid once CF_ACCOUNT_ID is set."""
+    return (f"https://api.cloudflare.com/client/v4/accounts/"
+            f"{config.CF_ACCOUNT_ID}/ai")
+
+
 def complete(prompt, system=None, max_tokens=8000):
-    """Try Gemini, then Groq, then OpenRouter. Raises only if all fail.
+    """Try Gemini, then Groq, then OpenRouter, then Cloudflare. Raises
+    only if all fail.
     Default 8000 output tokens: full scripts (10-14 scenes, ~1,800
     words of narration as JSON) need ~3,000 tokens — the old 2,000
     default silently squeezed them down to 4-scene stubs on fallback
@@ -160,6 +174,16 @@ def complete(prompt, system=None, max_tokens=8000):
         except Exception as e:
             errors.append(f"openrouter: {str(e)[:150]}")
 
+    if config.CF_API_TOKEN and config.CF_ACCOUNT_ID:
+        try:
+            text = _openai_compatible(
+                _cf_base(), config.CF_API_TOKEN,
+                config.CF_MODEL, prompt, system, max_tokens)
+            comms.log(f"fallback used: cloudflare ({config.CF_MODEL})")
+            return text
+        except Exception as e:
+            errors.append(f"cloudflare: {str(e)[:150]}")
+
     raise RuntimeError("all providers failed:\n" + "\n".join(errors[:3])
                        if errors else "no LLM keys configured at all")
 
@@ -185,9 +209,15 @@ def diagnose():
          config.GROQ_MODEL),
         ("openrouter", "https://openrouter.ai/api", config.OPENROUTER_API_KEY,
          config.OPENROUTER_MODEL),
+        ("cloudflare", _cf_base() if config.CF_ACCOUNT_ID else "",
+         config.CF_API_TOKEN if config.CF_ACCOUNT_ID else "",
+         config.CF_MODEL),
     ]:
         if not key:
-            lines.append(f"— {name}: no key")
+            lines.append(f"— {name}: no key"
+                         + (" (CF_API_TOKEN set but CF_ACCOUNT_ID missing)"
+                            if name == "cloudflare" and config.CF_API_TOKEN
+                            else ""))
             continue
         try:
             text = _openai_compatible(base, key, model, test, None, 20)

@@ -34,6 +34,16 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")  # openrouter.ai
 OPENROUTER_MODEL = os.environ.get(
     "OPENROUTER_MODEL", "z-ai/glm-5.2:free")
 
+# Cloudflare Workers AI — the last safety net (10K neurons/day free).
+# The endpoint is per-account, so it needs BOTH the API token and the
+# numeric account id: dash.cloudflare.com -> Workers & Pages shows the
+# Account ID in the right sidebar. With either piece missing the chain
+# just skips this provider.
+CF_API_TOKEN = os.environ.get("CF_API_TOKEN", "")
+CF_ACCOUNT_ID = os.environ.get("CF_ACCOUNT_ID", "")
+CF_MODEL = os.environ.get(
+    "CF_MODEL", "@cf/meta/llama-3.3-70b-instruct-fp8-fast")
+
 # YouTube: refresh token + client from the one-time extract_refresh_token.py run
 YT_REFRESH_TOKEN = os.environ.get("YT_REFRESH_TOKEN", "")
 YT_CLIENT_ID = os.environ.get("YT_CLIENT_ID", "")

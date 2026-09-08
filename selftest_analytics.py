@@ -71,8 +71,13 @@ class FakeService:
         return self.reports_obj
 
 
-def fake_build(name, ver, credentials=None):
+BUILD_KW = {}
+
+
+def fake_build(name, ver, credentials=None, **kw):
     assert name == "youtubeanalytics" and ver == "v2", (name, ver)
+    BUILD_KW.clear()
+    BUILD_KW.update(kw)
     return FakeService()
 
 
@@ -156,6 +161,8 @@ def main():
               report["abc"].get("impressions") == 20000
               and abs(report["abc"].get("ctr", 0) - 0.051) < 1e-6
               and "impressions" not in report["def"])
+        check("discovery fetched remotely, not from the static cache",
+              BUILD_KW.get("static_discovery") is False)
 
         # 2. refused impressions query costs nothing
         yta = reset_module()

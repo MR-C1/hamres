@@ -48,7 +48,13 @@ def get_service():
         scopes=[SCOPE],
     )
     creds.refresh(Request())
-    _service = build("youtubeanalytics", "v2", credentials=creds)
+    # static_discovery=False: not every google-api-python-client build
+    # bundles a youtubeanalytics v2 discovery doc (Render's cached one
+    # raised UnknownApiNameOrVersion — "name: youtubeanalytics  version:
+    # v2"), so fetch the document remotely. One HTTPS GET per process;
+    # _service caches the built client after that.
+    _service = build("youtubeanalytics", "v2", credentials=creds,
+                     static_discovery=False)
     return _service
 
 

@@ -211,6 +211,30 @@ def generate_script(direction=None):
     return best
 
 
+def _parse_script(text):
+    """JSON text -> script dict, or None (logged). A mini-doc needs its
+    acts — a 4-scene stub means the provider squeezed the script (token
+    cap or lazy compliance), so reject rather than render a 90-second
+    "long-form"."""
+    if not text:
+        return None
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+    try:
+        script = json.loads(text)
+        if "id" not in script or "scenes" not in script:
+            raise ValueError("missing keys")
+        if len(script["scenes"]) < 8:
+            raise ValueError(f"too few scenes ({len(script['scenes'])}) "
+                             f"for the 8-12 min format")
+        return script
+    except Exception as e:
+        comms.log(f"script parse failed: {e}")
+        return None
+
+
 def _write_script(direction=None, research=None):
     direction = direction or state.STATE.get("topic_direction") or (
         "unsolved mysteries, strange science, history they never taught you")
@@ -229,25 +253,21 @@ def _write_script(direction=None, research=None):
                    + str(research.get("saturation_note", ""))[:200])
     text = gemini(prompt)
     if not text:
-        return None
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-    try:
-        script = json.loads(text)
-        if "id" not in script or "scenes" not in script:
-            raise ValueError("missing keys")
-        # a mini-doc needs its acts — a 4-scene stub means the provider
-        # squeezed the script (token cap or lazy compliance). Reject and
-        # retry rather than render a 90-second "long-form"
-        if len(script["scenes"]) < 8:
-            raise ValueError(f"too few scenes ({len(script['scenes'])}) "
-                             f"for the 8-12 min format")
+        return None          # the whole chain is silent — no nudge will help
+    script = _parse_script(text)
+    if script:
         return script
-    except Exception as e:
-        comms.log(f"script parse failed: {e}")
-        return None
+
+    # a stub script (the usual parse failure) gets ONE corrective retry
+    # that names the shortfall — a blind re-roll rolls the same dice on
+    # the same overloaded provider, but "you wrote 4 scenes, the format
+    # needs 8-12" snaps a lazy or squeezed model out of it.
+    text = gemini(prompt + ("\n\nIMPORTANT: your previous attempt failed the "
+                            "format check. It must be a COMPLETE script with "
+                            "8-12 full scenes (each with narration, source, "
+                            "archive_search, visual_keywords) — not a summary "
+                            "or an outline. Never cut the scene list short."))
+    return _parse_script(text)
 
 
 def queue_next_video(n=1, direction=None):

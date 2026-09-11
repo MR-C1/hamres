@@ -2916,7 +2916,13 @@ def api_action():
         state.reload_jobs()
         n = 0
         for j in state.STATE["jobs"]:
-            if j.get("status") == "failed":
+            # a render that finished but uploaded nothing (its result carries
+            # no video_url — dead token, quota) is lost work too, even though
+            # the status says done; requeue it alongside the true failures
+            lost_upload = (j.get("type") == "render"
+                           and j.get("status") == "done"
+                           and not (j.get("result") or {}).get("video_url"))
+            if j.get("status") == "failed" or lost_upload:
                 j["status"] = "pending"
                 j["updated"] = time.time()
                 n += 1
@@ -3213,6 +3219,15 @@ def report():
             comms.send(f"⚠️ <b>Render reported for an unknown job</b> "
                        f"(<code>{comms.esc(job_id)}</code>) — state may have "
                        f"been lost to a restart.", html=True)
+        else:
+            # ok yet nothing uploaded (dead OAuth token, upload-quota cap,
+            # ...). This exact silence once hid a full day of failed
+            # uploads — the renders were marked done and the owner never
+            # heard a word — so say it loudly.
+            comms.send(f"⚠️ <b>Rendered but upload failed</b> — "
+                       f"{comms.esc(data.get('title') or 'video')}\n"
+                       f"{comms.esc(str(data.get('msg', ''))[:400])}",
+                       html=True)
     elif job and job["type"] == "upload" and ok:
         comms.send(f"📤 <b>Uploaded</b> — {comms.esc(data.get('title', 'video'))}\n"
                    f"{comms.esc(data.get('video_url', ''))}", html=True)

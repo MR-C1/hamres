@@ -347,6 +347,68 @@ def main():
     check("state survives an empty channel", r.status_code, 200)
     check("videos degrade to a list", isinstance(d["videos"], list), True)
 
+    # ---- a render that uploads nothing must say so — and retry must
+    #      recover it (a dead OAuth token once hid a full day of these) ----
+    sent = []
+    appmod.comms.send = lambda msg, html=False: sent.append(msg)
+    # the action handlers import cloud INSIDE the function, so the module
+    # object itself is what must be neutralized (no dispatch in tests)
+    import cloud as cloudmod
+    cloudmod.wake_soon = lambda *a, **k: None
+    appmod.state.STATE["pending_videos"] = {}
+    appmod.state.STATE["jobs"] = [{
+        "id": "j1", "type": "render", "status": "claimed",
+        "created": 1.0, "updated": 2.0,
+        "script": {"id": "s1", "title": "The Lost Upload"}}]
+    r = c.post("/report",
+               json={"job_id": "j1", "ok": True, "title": "The Lost Upload",
+                     "msg": "rendered but upload FAILED: invalid_grant"},
+               headers={"X-Worker-Secret": "wsecret"})
+    check("upload-failure report accepted", r.status_code, 200)
+    check("the owner is told the upload failed",
+          any("upload failed" in m and "invalid_grant" in m for m in sent),
+          True)
+    check("the job is still recorded done",
+          appmod.state.STATE["jobs"][0]["status"], "done")
+    check("no approval entry for an unuploaded render",
+          appmod.state.STATE["pending_videos"], {})
+
+    # the contrast: a good report registers the approval, stays quiet
+    sent.clear()
+    appmod.state.STATE["jobs"] = [{
+        "id": "j2", "type": "render", "status": "claimed",
+        "created": 1.0, "updated": 2.0, "script": {"id": "s2", "title": "T2"}}]
+    r = c.post("/report",
+               json={"job_id": "j2", "ok": True, "title": "T2",
+                     "video_url": "https://youtu.be/good",
+                     "video_urls": ["https://youtu.be/good"]},
+               headers={"X-Worker-Secret": "wsecret"})
+    check("good report registers the pending approval",
+          "j2" in appmod.state.STATE["pending_videos"], True)
+    check("good report raises no alarm", sent, [])
+
+    # /retry requeues failed jobs AND done renders that uploaded nothing
+    appmod.state.STATE["jobs"] = [
+        {"id": "f1", "type": "render", "status": "failed",
+         "created": 1.0, "updated": 1.0},
+        {"id": "d1", "type": "render", "status": "done", "created": 2.0,
+         "updated": 2.0,
+         "result": {"msg": "rendered but upload FAILED", "video_url": ""}},
+        {"id": "d2", "type": "render", "status": "done", "created": 3.0,
+         "updated": 3.0,
+         "result": {"video_url": "https://youtu.be/ok"}},
+        {"id": "c1", "type": "cleanup", "status": "done", "created": 4.0,
+         "updated": 4.0},
+    ]
+    r = c.post("/api/action", json={"action": "retry"})
+    check("retry counts the failed and the lost uploads",
+          r.get_json().get("requeued"), 2)
+    by = {j["id"]: j["status"] for j in appmod.state.STATE["jobs"]}
+    check("failed job requeued", by.get("f1"), "pending")
+    check("done-but-unuploaded render requeued", by.get("d1"), "pending")
+    check("a render that uploaded stays done", by.get("d2"), "done")
+    check("non-render jobs are never requeued", by.get("c1"), "done")
+
     del sys.modules["yt_analytics"]
     print()
     if FAILS:

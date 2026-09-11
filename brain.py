@@ -24,14 +24,24 @@ SYSTEM = ("You are the growth manager of FOOTNOTE — a faceless YouTube "
           "(sub4sub, spam, bought views) — they get channels terminated.")
 
 
-def gemini(prompt, system=SYSTEM):
-    """One LLM call through the provider chain (Gemini → Groq → OpenRouter)."""
-    return llm.complete(prompt, system=system)
+def gemini(prompt, system=SYSTEM, gemini_models=None):
+    """One LLM call through the provider chain (Gemini → Groq → OpenRouter).
+    gemini_models restricts which Gemini models may answer — script
+    generation passes SCRIPT_GEMINI_MODELS (see below)."""
+    return llm.complete(prompt, system=system, gemini_models=gemini_models)
 
 
 # ---------------------------------------------------------------------------
 # script generation (same JSON schema as the pipeline queue)
 # ---------------------------------------------------------------------------
+
+# flash-latest ONLY for script writing: when it 503s (chronic), the lite
+# geminis behind it in llm.GEMINI_MODELS quietly take over — and they are
+# the ones writing the 3-6 scene stubs. Skipping them lets the chain fall
+# straight to groq's gpt-oss-120b, a big model that honors the 8-12 scene
+# format. Lite models stay in the chain for everything short (scoring,
+# comments, summaries).
+SCRIPT_GEMINI_MODELS = ["gemini-flash-latest"]
 
 SCRIPT_PROMPT = """Write ONE video script for a faceless YouTube facts/mystery channel, as strict JSON only (no markdown, no commentary):
 
@@ -251,7 +261,7 @@ def _write_script(direction=None, research=None):
                    + "\nFresh angle: " + str(research.get("angle", ""))[:300]
                    + "\nSaturation: "
                    + str(research.get("saturation_note", ""))[:200])
-    text = gemini(prompt)
+    text = gemini(prompt, gemini_models=SCRIPT_GEMINI_MODELS)
     if not text:
         return None          # the whole chain is silent — no nudge will help
     script = _parse_script(text)
@@ -266,7 +276,8 @@ def _write_script(direction=None, research=None):
                             "format check. It must be a COMPLETE script with "
                             "8-12 full scenes (each with narration, source, "
                             "archive_search, visual_keywords) — not a summary "
-                            "or an outline. Never cut the scene list short."))
+                            "or an outline. Never cut the scene list short."),
+                  gemini_models=SCRIPT_GEMINI_MODELS)
     return _parse_script(text)
 
 

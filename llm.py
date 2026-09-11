@@ -10,7 +10,15 @@ free 10K neurons/day go furthest when it only fires in a true
 everything-else-is-down emergency. It needs both CF_API_TOKEN and
 CF_ACCOUNT_ID (the endpoint is per-account) — with either missing the
 chain skips it.
+
+search_complete() is the grounded-research entry point: Gemini WITH
+google_search, then a keyless DuckDuckGo scrape digested by the normal
+chain, then Groq's compound system.
 """
+
+import html
+import re
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import requests
 
@@ -35,12 +43,18 @@ def _gemini_keys():
     return live + cooling
 
 
-def _gemini(prompt, system, max_tokens):
+def _gemini(prompt, system, max_tokens, models=None):
+    """models restricts which Gemini models may answer (default: the
+    full GEMINI_MODELS list). Long-form script generation passes only
+    the big flash model — the lite geminis behind it quietly write
+    3-6 scene stubs whenever flash-latest is down (its 503s are
+    chronic), so for that work the chain should fall straight through
+    to groq's big gpt-oss instead."""
     from google import genai
     last_err = None
     for key in _gemini_keys():
         client = genai.Client(api_key=key)
-        for model in GEMINI_MODELS:
+        for model in (models or GEMINI_MODELS):
             try:
                 cfg = {"max_output_tokens": max_tokens}
                 if system:
@@ -106,15 +120,107 @@ def _openai_compatible(base, key, model, prompt, system, max_tokens):
     return content.strip()
 
 
+# ---------------------------------------------------------------------------
+# keyless web search — DuckDuckGo's HTML endpoints, parsed with regex
+# (no bs4 dependency). This is the research fallback that needs NO api
+# key and NO provider quota: gemini free-tier grounding is not included
+# for these models (permanent 429s) and groq/compound's search pipeline
+# inflates its internal request past the size cap (413 on any prompt
+# that actually searches). Both were verified live 2026-09-11.
+# ---------------------------------------------------------------------------
+
+_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+
+# title anchors: class then href, href then class, and the lite endpoint's
+# single-quoted result-link variant
+_TITLE_PATTERNS = [
+    r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+    r'href="([^"]+)"[^>]*class="result__a"[^>]*>(.*?)</a>',
+    r'href="([^"]+)"[^>]*class=[\x27"]result-link[\x27"][^>]*>(.*?)</a>',
+]
+_SNIPPET_PATTERNS = [
+    r'class="result__snippet"[^>]*>(.*?)</a>',
+    r'class=[\x27"]result-snippet[\x27"][^>]*>(.*?)</td>',
+]
+
+
+def _unwrap_ddg(href):
+    """DDG wraps outbound links as //duckduckgo.com/l/?uddg=<urlencoded>
+    — unwrap to the real destination."""
+    if "uddg=" in href:
+        got = parse_qs(urlparse(href).query).get("uddg", [""])
+        if got[0]:
+            return unquote(got[0])
+    return href
+
+
+def _strip_tags(s):
+    return re.sub(r"\s+", " ", html.unescape(
+        re.sub(r"<[^>]+>", " ", s))).strip()
+
+
+def ddg_search(query, n=8):
+    """Search DuckDuckGo, keyless. Returns [(title, url, snippet)] or
+    raises — callers treat that as 'this fallback unavailable'."""
+    last = "no endpoint tried"
+    for base in ("https://html.duckduckgo.com/html/?q=",
+                 "https://lite.duckduckgo.com/lite/?q="):
+        host = base.split("/")[2]
+        try:
+            r = requests.get(base + quote(query),
+                             headers={"User-Agent": _UA,
+                                      "Accept-Language": "en-US,en;q=0.8"},
+                             timeout=15)
+            if r.status_code != 200:
+                last = f"{host}: HTTP {r.status_code}"
+                continue
+            titles = []
+            for pat in _TITLE_PATTERNS:
+                titles = re.findall(pat, r.text, re.S)
+                if titles:
+                    break
+            snippets = []
+            for pat in _SNIPPET_PATTERNS:
+                snippets = re.findall(pat, r.text, re.S)
+                if snippets:
+                    break
+            out = []
+            for (href, title), snip in zip(
+                    titles, snippets + [""] * len(titles)):
+                url = _unwrap_ddg(html.unescape(href))
+                if not url.startswith("http"):
+                    continue
+                out.append((_strip_tags(title), url, _strip_tags(snip)))
+            if out:
+                return out[:n]
+            last = f"{host}: 0 results parsed"
+        except Exception as e:
+            last = f"{host}: {str(e)[:60]}"
+    raise RuntimeError(f"duckduckgo search failed: {last}")
+
+
+_QUERY_INSTR = ("You are choosing a web-search query for a documentary "
+                "channel. From the brief below, output ONLY the search "
+                "query itself — 5 to 10 words, no quotes, no explanation, "
+                "nothing else. Target a fresh topic in the brief's "
+                "direction that is NOT among its already-used topics:"
+                "\n\n")
+
+
 def search_complete(prompt, system=None, max_tokens=4000):
     """Gemini WITH google_search grounding — the model searches the live
     web and answers with real sources. Used for the research pass before
     scripting: facts arrive grounded instead of from model memory.
 
-    Grounding is the flakiest free-tier Gemini feature (429s constantly),
-    so Groq's compound models — which run their own server-side web
-    search and answer with citations — are the fallback. Research never
-    dies just because every Gemini key is over quota."""
+    Grounding is not included on gemini's free tier for these models
+    (permanent 429s), so the first fallback is KEYLESS: scrape real
+    DuckDuckGo results and let the normal complete() chain extract the
+    facts from them — no api key, no search quota, works whenever any
+    generation provider is alive. Groq's compound system (its own
+    server-side web search) stays as the last resort for the day its
+    search pipeline stops 413ing. Research never dies just because
+    every Gemini key is over quota."""
     from google import genai
     last_err = None
     if config.GEMINI_API_KEYS:
@@ -140,6 +246,25 @@ def search_complete(prompt, system=None, max_tokens=4000):
                                   f"rotating to next key")
                         break
                     comms.log(f"gemini-search {model} failed: {msg[:80]}")
+
+    # keyless fallback: real search results in, plain generation out
+    try:
+        query = complete(_QUERY_INSTR + prompt, None, 60).strip()
+        query = query.strip("'\"").splitlines()[0][:120].strip()
+        results = ddg_search(query)
+        block = "\n".join(f"- {t} — {s} ({u})" for t, u, s in results)
+        text = complete(
+            prompt + "\n\nREAL web-search results for the query "
+            f"'{query}' (from DuckDuckGo). Every fact in 'sources' MUST "
+            "come from these results — cite each as 'title — URL'. If "
+            "they are too thin for 5-8 facts, pick a topic they support "
+            "better and say so in the JSON:\n" + block, system, max_tokens)
+        comms.log(f"research fallback used: duckduckgo "
+                  f"({len(results)} results for '{query}')")
+        return text
+    except Exception as e:
+        comms.log(f"duckduckgo research fallback failed: {str(e)[:80]}")
+
     if config.GROQ_API_KEY:
         try:
             text = _openai_compatible(
@@ -165,18 +290,21 @@ def _cf_base():
             f"{config.CF_ACCOUNT_ID}/ai")
 
 
-def complete(prompt, system=None, max_tokens=8000):
+def complete(prompt, system=None, max_tokens=8000, gemini_models=None):
     """Try Gemini, then Groq, then OpenRouter, then Cloudflare. Raises
     only if all fail.
     Default 8000 output tokens: full scripts (10-14 scenes, ~1,800
     words of narration as JSON) need ~3,000 tokens — the old 2,000
     default silently squeezed them down to 4-scene stubs on fallback
-    providers."""
+    providers.
+    gemini_models: restrict which Gemini models may answer (see
+    _gemini) — long-form script generation passes only the big flash
+    model so a 503 falls to groq's gpt-oss instead of a lite gemini."""
     errors = []
 
     if config.GEMINI_API_KEY:
         try:
-            return _gemini(prompt, system, max_tokens)
+            return _gemini(prompt, system, max_tokens, gemini_models)
         except Exception as e:
             errors.append(f"gemini: {str(e)[:150]}")
 
@@ -250,4 +378,12 @@ def diagnose():
             lines.append(f"✅ {name} ({model}) — replied: {text[:40]!r}")
         except Exception as e:
             lines.append(f"❌ {name} — {str(e)[:200]}")
+    # the keyless research fallback gets its own health line so /diag
+    # can prove it works from THIS machine (datacenter IPs can differ)
+    try:
+        hits = ddg_search("unexplained historical mystery", n=3)
+        lines.append(f"✅ duckduckgo search — {len(hits)} results "
+                     f"(keyless research fallback armed)")
+    except Exception as e:
+        lines.append(f"❌ duckduckgo search — {str(e)[:120]}")
     return "\n".join(lines)

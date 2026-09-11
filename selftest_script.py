@@ -7,6 +7,8 @@ brain.gemini so the corrective-retry path runs end to end:
     instead of losing the day
   * both attempts failing returns None (the queue just skips)
   * a fenced ```json block still parses (strip logic lives in _parse_script)
+  * script writing routes to the big-model gemini list — flash-latest
+    only, so a 503 falls to groq's big model instead of a lite gemini
 
     python selftest_script.py
 """
@@ -52,14 +54,25 @@ def good_script(n=10):
 
 def main():
     brain = fresh()
-    calls = {"n": 0, "prompts": []}
+    calls = {"n": 0, "prompts": [], "models": []}
 
-    def fake_gemini(prompt, system=None):
+    def fake_gemini(prompt, system=None, gemini_models=None):
         calls["n"] += 1
         calls["prompts"].append(prompt)
+        calls["models"].append(gemini_models)
         return calls["plan"].pop(0)
 
     brain.gemini = fake_gemini
+
+    # 0. script writing asks for the big-model chain only (flash-latest
+    #    503s are chronic; the lite geminis behind it write the stubs)
+    calls["plan"] = [good_script(10)]
+    brain._write_script("mysteries")
+    check("script generation passes the big-model gemini list",
+          calls["models"], [brain.SCRIPT_GEMINI_MODELS])
+    check("the big-model list is flash-latest only",
+          brain.SCRIPT_GEMINI_MODELS, ["gemini-flash-latest"])
+    calls["n"] = 0  # the count checks below are per-scenario
 
     # 1. good script passes on the first call — no retry spent
     calls["plan"] = [good_script(10)]

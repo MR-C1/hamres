@@ -208,19 +208,88 @@ _QUERY_INSTR = ("You are choosing a web-search query for a documentary "
                 "\n\n")
 
 
+def wiki_search(query, n=5):
+    """Keyless Wikipedia search + intro extracts. DuckDuckGo blocks
+    datacenter IPs (verified live on Render 2026-09-11), but Wikipedia's
+    API is built for programmatic use — and it is exactly the source
+    this channel cites anyway. Returns [(title, url, extract)] or
+    raises."""
+    api = "https://en.wikipedia.org/w/api.php"
+    r = requests.get(api, params={
+        "action": "query", "list": "search", "srsearch": query,
+        "srlimit": n, "format": "json"},
+        headers={"User-Agent": _UA}, timeout=15)
+    if r.status_code != 200:
+        raise RuntimeError(f"wikipedia search: HTTP {r.status_code}")
+    hits = r.json().get("query", {}).get("search", [])
+    if not hits:
+        raise RuntimeError("wikipedia: 0 hits")
+    titles = [h["title"] for h in hits]
+    r2 = requests.get(api, params={
+        "action": "query", "prop": "extracts", "exintro": 1,
+        "explaintext": 1, "titles": "|".join(titles), "format": "json"},
+        headers={"User-Agent": _UA}, timeout=15)
+    if r2.status_code != 200:
+        raise RuntimeError(f"wikipedia extracts: HTTP {r2.status_code}")
+    out = []
+    for p in r2.json().get("query", {}).get("pages", {}).values():
+        ex = (p.get("extract") or "").strip()
+        if not ex:
+            continue  # disambiguation stubs etc.
+        t = p.get("title", "?")
+        out.append((t, "https://en.wikipedia.org/wiki/"
+                   + quote(t.replace(" ", "_")), ex))
+    if not out:
+        raise RuntimeError("wikipedia: no extracts")
+    return out[:n]
+
+
+def _keyless_research(prompt, system, max_tokens):
+    """Grounded research with NO api key and NO search quota: turn the
+    brief into a query, fetch REAL results (wikipedia's API from
+    datacenter IPs, the DDG scrape for the broader web where it isn't
+    blocked), then let the normal complete() chain extract the facts.
+    Raises if no source answers or the chain is dead."""
+    query = complete(_QUERY_INSTR + prompt, None, 60).strip()
+    query = query.strip("'\"").splitlines()[0][:120].strip()
+    results, src = [], ""
+    for fetch, name in ((wiki_search, "wikipedia"),
+                        (ddg_search, "duckduckgo")):
+        try:
+            results = fetch(query)
+            if results:
+                src = name
+                break
+        except Exception as e:
+            comms.log(f"{name} search failed: {str(e)[:80]}")
+    if not results:
+        raise RuntimeError("no keyless search source answered")
+    block = "\n".join(f"- {t} — {s} ({u})" for t, u, s in results)
+    text = complete(
+        prompt + "\n\nREAL web-search results for the query "
+        f"'{query}' (from {src}). Every fact in 'sources' MUST come "
+        "from these results — cite each as 'title — URL'. If they are "
+        "too thin for 5-8 facts, pick a topic they support better and "
+        "say so in the JSON:\n" + block, system, max_tokens)
+    comms.log(f"research fallback used: {src} "
+              f"({len(results)} results for '{query}')")
+    return text
+
+
 def search_complete(prompt, system=None, max_tokens=4000):
     """Gemini WITH google_search grounding — the model searches the live
     web and answers with real sources. Used for the research pass before
     scripting: facts arrive grounded instead of from model memory.
 
     Grounding is not included on gemini's free tier for these models
-    (permanent 429s), so the first fallback is KEYLESS: scrape real
-    DuckDuckGo results and let the normal complete() chain extract the
-    facts from them — no api key, no search quota, works whenever any
-    generation provider is alive. Groq's compound system (its own
-    server-side web search) stays as the last resort for the day its
-    search pipeline stops 413ing. Research never dies just because
-    every Gemini key is over quota."""
+    (permanent 429s), so the first fallback is KEYLESS: fetch real
+    results from wikipedia's API (datacenter-IP-safe) or the DuckDuckGo
+    scrape and let the normal complete() chain extract the facts from
+    them — no api key, no search quota, works whenever any generation
+    provider is alive. Groq's compound system (its own server-side web
+    search) stays as the last resort for the day its search pipeline
+    stops 413ing. Research never dies just because every Gemini key is
+    over quota."""
     from google import genai
     last_err = None
     if config.GEMINI_API_KEYS:
@@ -249,21 +318,9 @@ def search_complete(prompt, system=None, max_tokens=4000):
 
     # keyless fallback: real search results in, plain generation out
     try:
-        query = complete(_QUERY_INSTR + prompt, None, 60).strip()
-        query = query.strip("'\"").splitlines()[0][:120].strip()
-        results = ddg_search(query)
-        block = "\n".join(f"- {t} — {s} ({u})" for t, u, s in results)
-        text = complete(
-            prompt + "\n\nREAL web-search results for the query "
-            f"'{query}' (from DuckDuckGo). Every fact in 'sources' MUST "
-            "come from these results — cite each as 'title — URL'. If "
-            "they are too thin for 5-8 facts, pick a topic they support "
-            "better and say so in the JSON:\n" + block, system, max_tokens)
-        comms.log(f"research fallback used: duckduckgo "
-                  f"({len(results)} results for '{query}')")
-        return text
+        return _keyless_research(prompt, system, max_tokens)
     except Exception as e:
-        comms.log(f"duckduckgo research fallback failed: {str(e)[:80]}")
+        comms.log(f"keyless research fallback failed: {str(e)[:80]}")
 
     if config.GROQ_API_KEY:
         try:
@@ -378,12 +435,14 @@ def diagnose():
             lines.append(f"✅ {name} ({model}) — replied: {text[:40]!r}")
         except Exception as e:
             lines.append(f"❌ {name} — {str(e)[:200]}")
-    # the keyless research fallback gets its own health line so /diag
-    # can prove it works from THIS machine (datacenter IPs can differ)
-    try:
-        hits = ddg_search("unexplained historical mystery", n=3)
-        lines.append(f"✅ duckduckgo search — {len(hits)} results "
-                     f"(keyless research fallback armed)")
-    except Exception as e:
-        lines.append(f"❌ duckduckgo search — {str(e)[:120]}")
+    # each keyless research source gets its own health line so /diag can
+    # show which ones answer from THIS machine (datacenter IPs differ)
+    for name, fn in (("duckduckgo", ddg_search),
+                     ("wikipedia", wiki_search)):
+        try:
+            hits = fn("unexplained historical mystery", n=3)
+            lines.append(f"✅ {name} search — {len(hits)} results "
+                         f"(keyless research fallback)")
+        except Exception as e:
+            lines.append(f"❌ {name} search — {str(e)[:120]}")
     return "\n".join(lines)

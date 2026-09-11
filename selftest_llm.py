@@ -5,10 +5,11 @@ then proves the ordering rules: every provider is tried only after the
 one above it fails, Cloudflare is skipped without its account id, its
 URL carries the account id, and a provider failure never poisons the
 chain. The search path gets the same treatment: gemini grounding fails
--> the KEYLESS duckduckgo fallback answers (real results embedded in
-the extraction prompt), and compound only fires when the scrape is
-down. Script-grade generation can also be restricted to the big gemini
-so a 503 falls to groq instead of a lite model.
+-> the KEYLESS fallback answers — wikipedia's API first (datacenter-IP
+safe), the duckduckgo scrape second, real results embedded in the
+extraction prompt — and compound only fires when both are down.
+Script-grade generation can also be restricted to the big gemini so a
+503 falls to groq instead of a lite model.
 
     python selftest_llm.py
 """
@@ -72,25 +73,53 @@ DDG_HTML = """
 DDG_LITE = """<tr><td><a rel="nofollow" href="https://lite.example/story" class='result-link'>Lite Story</a></td></tr>
 <tr><td class="result-snippet">A snippet from lite.</td></tr>"""
 
+# canned wikipedia API answers (the datacenter-safe keyless source)
+WIKI_SEARCH = {"query": {"search": [{"title": "Mary Celeste"},
+                                    {"title": "Ghost ship"}]}}
+WIKI_EXTRACTS = {"query": {"pages": {
+    "11": {"title": "Mary Celeste",
+           "extract": "The Mary Celeste was an American brigantine found "
+                      "adrift and abandoned in the Atlantic in 1872."},
+    "22": {"title": "Ghost ship",
+           "extract": "A ghost ship is a vessel found adrift with no "
+                      "crew aboard."},
+    "33": {"title": "Mary Celeste (disambiguation)",
+           "extract": ""},}}}
+
 
 class FakeGet:
-    def __init__(self, status=200, text=DDG_HTML):
+    def __init__(self, status=200, text="", body=None):
         self.status_code = status
         self.text = text
+        self._body = body
+
+    def json(self):
+        return self._body if self._body is not None else {}
 
 
-# per-test stand-in: None = canned page; FakeGet/Exception = that;
-# callable = f(url) -> FakeGet/Exception
+def canned_get(url, params=None, headers=None, timeout=None):
+    """Default GET stand-in: wikipedia API by params, DDG page else."""
+    if "wikipedia.org" in url:
+        if params and params.get("list") == "search":
+            return FakeGet(200, body=WIKI_SEARCH)
+        return FakeGet(200, body=WIKI_EXTRACTS)
+    return FakeGet(200, DDG_HTML)
+
+
+# per-test stand-in: None = canned; FakeGet/Exception = that;
+# callable = f(url, params) -> FakeGet/Exception
 GET_MODE = {"resp": None}
 
 
-def fake_get(url, headers=None, timeout=None):
+def fake_get(url, params=None, headers=None, timeout=None):
     got = GET_MODE["resp"]
+    if got is None:
+        return canned_get(url, params)
     if callable(got):
-        got = got(url)
+        got = got(url, params)
     if isinstance(got, Exception):
         raise got
-    return got if got is not None else FakeGet()
+    return got
 
 
 def reset(**attrs):
@@ -170,14 +199,20 @@ def main():
         check("diagnose shows cloudflare attempt",
               cf_line.startswith("❌ cloudflare"))
         ddg_line = next((l for l in lines if "duckduckgo" in l), "")
-        check("diagnose shows the keyless search fallback armed",
+        check("diagnose shows the duckduckgo fallback armed",
               ddg_line.startswith("✅ duckduckgo"))
+        wiki_line = next((l for l in lines if "wikipedia" in l), "")
+        check("diagnose shows the wikipedia fallback armed",
+              wiki_line.startswith("✅ wikipedia"))
         reset(CF_ACCOUNT_ID="")
         GET_MODE["resp"] = FakeGet(403, "anomaly")
         lines = llm.diagnose().splitlines()
         ddg_line = next((l for l in lines if "duckduckgo" in l), "")
-        check("diagnose reports a dead keyless fallback",
+        check("diagnose reports a dead duckduckgo fallback",
               ddg_line.startswith("❌ duckduckgo"))
+        wiki_line = next((l for l in lines if "wikipedia" in l), "")
+        check("diagnose reports a dead wikipedia fallback",
+              wiki_line.startswith("❌ wikipedia"))
         cf_line = next((l for l in lines if "cloudflare" in l), "")
         check("diagnose hints at the missing account id",
               "CF_ACCOUNT_ID missing" in cf_line)
@@ -202,7 +237,7 @@ def main():
               res and res[0][0] == "Lite Story"
               and res[0][2] == "A snippet from lite."
               and res[0][1] == "https://lite.example/story")
-        GET_MODE["resp"] = lambda url: (
+        GET_MODE["resp"] = lambda url, params=None: (
             FakeGet(403, "anomaly") if "html.duckduckgo" in url
             else FakeGet(200, DDG_LITE))
         res = llm.ddg_search("q")
@@ -215,6 +250,27 @@ def main():
         except RuntimeError as e:
             check("ddg raises when both endpoints fail",
                   "duckduckgo search failed" in str(e))
+        GET_MODE["resp"] = None
+
+        # 5b2. the wikipedia parser: search + extracts, url shape,
+        #      disambiguation stubs (empty extract) skipped
+        res = llm.wiki_search("mary celeste")
+        check("wiki returns titles, urls and extracts",
+              res and res[0][0] == "Mary Celeste"
+              and res[0][1]
+              == "https://en.wikipedia.org/wiki/Mary_Celeste"
+              and "brigantine" in res[0][2])
+        check("wiki skips empty extracts (disambiguation stubs)",
+              res and len(res) == 2 and all(r[2] for r in res))
+        GET_MODE["resp"] = lambda url, params=None: (
+            FakeGet(200, body={"query": {"search": []}})
+            if "wikipedia.org" in url else canned_get(url, params))
+        try:
+            llm.wiki_search("q")
+            check("wiki raises when it has nothing", False)
+        except RuntimeError as e:
+            check("wiki raises when it has nothing",
+                  "wikipedia" in str(e))
         GET_MODE["resp"] = None
 
         # 5c. gemini_models restriction: flash-latest 503s -> groq,
@@ -272,21 +328,21 @@ def main():
                 sys.modules["google"] = real_google
             llm._key_cooldown.clear()
 
-        # 6. search_complete: no gemini keys -> the KEYLESS ddg path
-        #    answers (query call + extraction call ride the chain);
-        #    compound stays untouched while ddg works
+        # 6. search_complete: no gemini keys -> the KEYLESS wikipedia
+        #    path answers (query call + extraction call ride the chain);
+        #    compound stays untouched while keyless works
         CALLS.clear()
         llm._key_cooldown.clear()
         reset(GEMINI_API_KEY="", GEMINI_API_KEYS=[], GROQ_API_KEY="groqk",
               GROQ_MODEL="openai/gpt-oss-120b",
               GROQ_SEARCH_MODEL="groq/compound")
         out = llm.search_complete("research this")
-        check("search falls to keyless ddg without gemini keys",
+        check("search falls to keyless wikipedia without gemini keys",
               out == "ANSWER")
         gq = [c for c in CALLS if "api.groq.com" in c["url"]]
-        check("both ddg calls ride the working chain (query + extract)",
+        check("both keyless calls ride the working chain (query + extract)",
               len(gq) == 2)
-        check("no compound call while ddg works",
+        check("no compound call while keyless works",
               all(c["json"].get("model") != "groq/compound" for c in gq))
         check("query call asks for a bare search query",
               gq and "output ONLY the search query"
@@ -295,8 +351,24 @@ def main():
         check("extraction call embeds the real results",
               "REAL web-search results" in extract
               and "https://en.wikipedia.org/wiki/Mary_Celeste" in extract)
+        check("extraction names its source",
+              "from wikipedia" in extract)
         check("extraction call carries the original prompt",
               "research this" in extract)
+
+        # 6b. wikipedia blocked -> the ddg scrape answers instead
+        GET_MODE["resp"] = lambda url, params=None: (
+            RuntimeError("wiki blocked from this ip")
+            if "wikipedia.org" in url else canned_get(url, params))
+        CALLS.clear()
+        out = llm.search_complete("research this")
+        gq = [c for c in CALLS if "api.groq.com" in c["url"]]
+        check("wiki down -> the ddg scrape answers", out == "ANSWER")
+        extract = gq[1]["json"]["messages"][-1]["content"]
+        check("ddg extraction names its source",
+              "from duckduckgo" in extract
+              and "https://en.wikipedia.org/wiki/Mary_Celeste" in extract)
+        GET_MODE["resp"] = None
 
         # 7. search_complete: every gemini key 429s -> still ddg, and
         #    the quota-hit key still gets its cooldown
@@ -329,7 +401,7 @@ def main():
                   GROQ_API_KEY="groqk", GROQ_MODEL="openai/gpt-oss-120b",
                   GROQ_SEARCH_MODEL="groq/compound")
             out = llm.search_complete("research this")
-            check("gemini 429s -> search still answers via ddg",
+            check("gemini 429s -> search still answers keyless",
                   out == "ANSWER")
             check("quota-hit gemini key got a cooldown",
                   llm._key_cooldown.get("gk1", 0) > 0)
@@ -341,8 +413,9 @@ def main():
                 sys.modules["google"] = real_google
             llm._key_cooldown.clear()
 
-        # 7b. search_complete: ddg scrape down -> groq compound fires as
-        #     the last resort (kept for the day its search stops 413ing)
+        # 7b. search_complete: every keyless source down -> groq
+        #     compound fires as the last resort (kept for the day its
+        #     search stops 413ing)
         GET_MODE["resp"] = FakeGet(403, "anomaly")
         CALLS.clear()
         reset(GEMINI_API_KEY="", GEMINI_API_KEYS=[], GROQ_API_KEY="groqk",
@@ -350,7 +423,7 @@ def main():
               GROQ_SEARCH_MODEL="groq/compound")
         out = llm.search_complete("research this")
         comp = [c for c in CALLS if c["json"].get("model") == "groq/compound"]
-        check("ddg down -> compound answers as last resort",
+        check("keyless sources down -> compound answers as last resort",
               out == "ANSWER" and len(comp) == 1)
         check("compound call is a plain chat completion",
               comp and comp[0]["url"]

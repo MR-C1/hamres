@@ -215,6 +215,23 @@ def make_public(video_url):
         "id": video_id, "status": status}).execute()
 
 
+def schedule_public(video_url, publish_at_utc):
+    """Keep the video private but let YouTube flip it public at
+    `publish_at_utc` (RFC 3339 UTC, e.g. "2026-09-15T11:00:00Z") — the
+    owner's ✅ lands the video in the channel's best hour without anyone
+    waiting up for the clock."""
+    yt = get_service()
+    video_id = video_url.rstrip("/").split("/")[-1]
+    v = yt.videos().list(part="status", id=video_id).execute()
+    if not v.get("items"):
+        raise RuntimeError(f"video {video_id} not found")
+    status = v["items"][0]["status"]
+    status["privacyStatus"] = "private"  # publishAt requires it
+    status["publishAt"] = publish_at_utc
+    yt.videos().update(part="status", body={
+        "id": video_id, "status": status}).execute()
+
+
 def delete_video(video_url):
     """Delete an uploaded video (owner's ❌). True if deleted or gone."""
     yt = get_service()

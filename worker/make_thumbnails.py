@@ -50,6 +50,13 @@ def wrap(draw, text, font, max_w):
     return lines
 
 
+def thumb_text(script):
+    """The overlay words: the QA-picked concept text (2-4 punchy words
+    chosen against the title for a curiosity gap) when the brain picked
+    one, else the title itself — the pre-2026-09 behavior."""
+    return (script.get("thumbnail") or {}).get("text") or script["title"]
+
+
 def _pollinations_bg(script):
     """AI background via Pollinations (free). Registered "seed" tier
     (POLLINATIONS_TOKEN env var) gives 3x the rate, standard models,
@@ -57,10 +64,16 @@ def _pollinations_bg(script):
     import os
     import urllib.parse
     import urllib.request
-    kws = []
-    for s in script.get("scenes", [])[:3]:
-        kws.extend(s.get("visual_keywords", [])[:1])
-    subject = " ".join(kws[:2]) or script["title"]
+    # the QA-picked concept describes exactly the picture to draw;
+    # without one, fall back to the first scenes' visual keywords
+    concept = (script.get("thumbnail") or {}).get("concept")
+    if concept:
+        subject = concept
+    else:
+        kws = []
+        for s in script.get("scenes", [])[:3]:
+            kws.extend(s.get("visual_keywords", [])[:1])
+        subject = " ".join(kws[:2]) or script["title"]
     prompt = (f"dark moody cinematic {subject}, single centered subject, "
               f"dramatic lighting, film grain, high contrast, no text, "
               f"no words, no letters")
@@ -130,7 +143,7 @@ def make_thumbnail(script, out_path, video_path=None):
 
     font = _font(100 if has_bg else 100)
     text_fill = (250, 246, 238, 255) if has_bg else INK
-    lines = wrap(d, script["title"].upper(), font, W - 220)
+    lines = wrap(d, thumb_text(script).upper(), font, W - 220)
     line_h = 116
     y0 = (H - line_h * len(lines)) // 2
     d.rectangle([70, y0 - 40, W - 70, y0 - 32], fill=CREAM if has_bg else INK)

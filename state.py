@@ -18,7 +18,9 @@ STATE shape:
   "settings": {paused, auto_approve, approved_count, auto_approve_after,
                publish_hour},
   "worker": {"last_seen": iso, "last_job": str, "warned_offline": bool},
-  "best_hour": 17
+  "best_hour": 17,
+  "retention_scores": [...],   # QA gate ledger, same shape as hook_scores
+  "title_swaps": { video_id: {"from", "to", "when"} }  # one per video, ever
 }
 """
 
@@ -393,3 +395,5 @@ def default_state():
     STATE.setdefault("worker", {"last_seen": "", "last_job": "",
                                 "warned_offline": False})
     STATE.setdefault("best_hour", 17)
+    STATE.setdefault("retention_scores", [])
+    STATE.setdefault("title_swaps", {})

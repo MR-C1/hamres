@@ -3253,24 +3253,32 @@ def report():
 
 
 def _publish_now(approval_id, note=""):
-    """Flip a pending video's YouTube privacy to public — every format
-    (short + long) uploaded for it."""
+    """Schedule a pending video public at the channel's best hour —
+    every format (short + long) uploaded for it. YouTube's publishAt
+    does the actual flip, so a ✅ tapped at dawn still goes live at the
+    hour the numbers like. (The name is historical; the timing is
+    deliberate — see brain.next_publish_time.)"""
     p = state.STATE["pending_videos"].get(approval_id)
     if not p or not p.get("video_url"):
         return False
     urls = p.get("video_urls") or [p["video_url"]]
+    when = brain.next_publish_time()          # BD clock
+    when_utc = when - config.BD_OFFSET        # YouTube speaks UTC
     try:
         for url in urls:
-            yt.make_public(url)
+            yt.schedule_public(
+                url, when_utc.strftime("%Y-%m-%dT%H:%M:%SZ"))
     except Exception as e:
-        comms.send(f"⚠️ Couldn't make it public — {comms.esc(str(e)[:150])}. "
-                   f"Try again or flip it in YouTube Studio.", html=True)
+        comms.send(f"⚠️ Couldn't schedule it public — "
+                   f"{comms.esc(str(e)[:150])}. Try again or flip it in "
+                   f"YouTube Studio.", html=True)
         return False
     state.STATE["pending_videos"].pop(approval_id, None)
     state.tombstone_decided([approval_id])
     state.save_soon()
-    comms.send(f"🚀 <b>Published</b> — {comms.esc(p['title'][:60])}\n"
-               f"{comms.esc(urls[0])}", html=True)
+    comms.send(f"🗓 <b>Scheduled</b> — {comms.esc(p['title'][:60])}\n"
+               f"Goes public {when:%a %d %b, %H:%M} BD (the best hour by "
+               f"the numbers so far).\n{comms.esc(urls[0])}", html=True)
     return True
 
 
@@ -3311,9 +3319,10 @@ def _job_in_flight(approval_id):
 
 
 def _record_decision(approval_id, decision):
-    """Owner's ✅ = flip the already-uploaded video public; ❌ = delete
-    it from YouTube. No time window — the video is safely private on
-    YouTube until decided, so the decision can come hours or days later.
+    """Owner's ✅ = schedule the already-uploaded video public at the
+    best hour; ❌ = delete it from YouTube. No time window — the video
+    sits safely private on YouTube until decided, so the decision can
+    come hours or days later.
 
     Returns whether the decision actually took effect, so callers (panel
     and Telegram alike) can report the truth instead of a blanket success.
@@ -3333,8 +3342,9 @@ def _record_decision(approval_id, decision):
                 del ed[old]
             state.save_soon()
             comms.send("⏳ Noted — the render is still finishing. I'll "
-                       + ("publish" if decision == "approved" else "delete")
-                       + " it the moment it lands.", html=True)
+                       + ("schedule it for the best hour"
+                          if decision == "approved" else "delete it")
+                       + " the moment it lands.", html=True)
             return False
         # entry is gone: either already decided (popped on publish) or
         # the state was lost. Honest reply either way.
@@ -3670,8 +3680,9 @@ def _is_publish_intent(text):
 
 
 def _publish_pending():
-    """Flip every pending video to public (owner said 'publish'). The
-    videos are already private on YouTube — this just makes them live.
+    """Schedule every pending video public at the best hour (owner said
+    'publish'). The videos are already private on YouTube — this only
+    sets their publishAt.
 
     Returns (published, failed) so the caller can report the truth: a
     YouTube call that refuses must not be announced as a publish. Trust
@@ -3841,15 +3852,24 @@ def scheduler_loop():
         state.default_state()  # self-heal if a restart lost keys
         if not state.STATE["settings"].get("paused"):
             once_per_day("daily report", brain.daily_report, 8, 0)
-            once_per_day("planning", brain.analyze_and_plan, 8, 30)
+            # Quality-first cadence: planning + top-up run only on
+            # publish days (config.PUBLISH_WEEKDAYS — Tue/Fri/Sun = 3
+            # videos a week). The retention data said volume wasn't the
+            # constraint, script quality was. /next, /idea and the
+            # panel's make-video button still queue any day, by hand.
+            if now.weekday() in config.PUBLISH_WEEKDAYS:
+                once_per_day("planning", brain.analyze_and_plan, 8, 30)
             once_per_day("title check", brain.title_check, 12, 0)
             if now.weekday() == 6:
                 once_per_day("weekly summary", brain.weekly_summary, 9, 0)
             every_hours("comment sweep", brain.comment_sweep, 4)
             # Through once_per_day, not a bare "is it 09:00?": the free dyno
             # restarts often, and a restart across that one minute used to
-            # skip the day's video silently. Now a late boot still catches up.
-            once_per_day("queue top-up", top_up_queue, 9, 0)
+            # skip the day's video silently. Now a late boot still catches up
+            # (a publish day's planning missed to an outage simply slides to
+            # the next publish day — the cadence absorbs it).
+            if now.weekday() in config.PUBLISH_WEEKDAYS:
+                once_per_day("queue top-up", top_up_queue, 9, 0)
 
         # worker offline watchdog — cloud-only mode: runners poll only
         # when jobs exist (wake-on-queue + 3 crons), so quiet gaps are

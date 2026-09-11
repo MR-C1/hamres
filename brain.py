@@ -75,6 +75,21 @@ STRUCTURE (this is a mini-documentary, not a list of facts):
 - The question from the hook must appear in the first 10% of the narration;
   the resolution/payoff appears ONLY in the final 20%. Everything between
   escalates.
+- RETENTION MECHANICS (the video must HOLD, not just hook — write for the
+  viewer's ear, never their eye):
+  * Spoken register always: short sentences (average under 14 words),
+    plain words, active voice. If a sentence sounds like an essay,
+    rewrite it.
+  * EVERY scene ends unresolved — a complication, a question, a twist.
+    No scene closes flat.
+  * Re-hook at every act break: one line that re-opens curiosity right
+    where attention would dip ("And that's where the record stops
+    making sense.").
+  * Say numbers like a person, not a paper ("nearly two hundred men",
+    not "approximately 187 individuals").
+  * No literary filler: no throat-clearing, no mood-setting without
+    facts, no adjective chains. Every sentence advances the story or
+    opens a question — ideally both.
 - Mark the 4 most visual scenes "in_short": true. Each in_short scene
   becomes BOTH part of the main Short and, if unused there, its own
   standalone Short (that's what short_title is for). All facts true,
@@ -158,6 +173,45 @@ def _score_hook(script):
         return 75, "unscorable"
 
 
+RETENTION_PROMPT = """Score this video SCRIPT (a mini-documentary) 0-100 for its ability to HOLD attention through the whole video — not the hook, the middle.
+
+Signals, in descending weight:
+1. Every scene ends unresolved — a complication, a question, a twist — no scene closes flat
+2. Escalation: "but/therefore" momentum between scenes, never flat "and then" chronology
+3. Re-hooks at act breaks — a line that re-opens curiosity right where attention would dip
+4. Spoken register — short sentences (average under 14 words), plain words, active voice; an essay voice scores low
+5. Tight scenes — nothing that could be cut without breaking the chain
+6. Payoff placement — the resolution only lands in the final act
+
+Scenes:
+"{scenes}"
+
+Title for context: "{title}"
+
+Respond with strict JSON only: {{"score": <0-100 integer>, "reason": "<15 words max on the weakest signal>"}}"""
+
+
+def _score_retention(script):
+    """Gate 2: hold-ability of the full script — the hook scorer only
+    sees the first 30 seconds, and the 2.5% long-form retention lived in
+    the middle. Fails OPEN at 75, same contract as _score_hook."""
+    try:
+        scenes = "\n\n".join(
+            f"[{i + 1}] {s.get('narration', '')}"
+            for i, s in enumerate(script.get("scenes", [])))[:6000]
+        r = gemini(RETENTION_PROMPT.format(
+            scenes=scenes, title=script.get("title", "")[:100]))
+        if r.strip().startswith("```"):
+            r = r.split("```")[1]
+            if r.strip().startswith("json"):
+                r = r[4:]
+        d = json.loads(r)
+        return int(d.get("score", 0)), str(d.get("reason", ""))[:120]
+    except Exception as e:
+        comms.log(f"retention scoring failed (gate open): {str(e)[:60]}")
+        return 75, "unscorable"
+
+
 RESEARCH_PROMPT = """You are researching a topic for a documentary YouTube channel. Channel direction: {direction}
 
 Topics already used (pick something DIFFERENT): {used}
@@ -194,31 +248,154 @@ def _research(direction, used):
     return None
 
 
+FACTCHECK_PROMPT = """You are a fact-checker for a documentary YouTube channel. Below are a script's scene narrations (each with its claimed source) and the RESEARCH SOURCES gathered for this topic before writing.
+
+Scene narrations:
+{scenes}
+
+Research sources:
+{sources}
+
+Check each scene's central claims. Flag ONLY real problems:
+- a fact that CONTRADICTS the research sources
+- a specific claim (date, number, name) the sources don't support AND that sounds wrong or invented
+- a citation that looks fabricated (not from the sources, not a plausible institution + year)
+
+Do NOT flag style, wording, claims too general to check, or harmless paraphrases.
+
+Respond with strict JSON only: {{"ok": true, "problems": []}} — or ok false with up to 4 problems, each under 25 words, like "Scene 4: sources say the ledger surfaced in 1935, not 1932"."""
+
+
+def _fact_check(script, research):
+    """Gate 3: script claims vs the grounded research it was written
+    from. Returns (ok, problems). Fails OPEN — a checker outage must not
+    stop production (and the research pass itself already failed open
+    upstream, which just means this draft ships unchecked)."""
+    try:
+        scenes = "\n\n".join(
+            f"[{i + 1}] {s.get('narration', '')}"
+            + (f"  (claimed source: {s['source']})"
+               if s.get("source") else "")
+            for i, s in enumerate(script.get("scenes", [])))[:5000]
+        if research and research.get("sources"):
+            sources = json.dumps(research["sources"],
+                                 ensure_ascii=False)[:3500]
+        else:
+            sources = ("(none — the research pass failed; flag only "
+                       "internally impossible specifics and citations "
+                       "that look invented)")
+        r = gemini(FACTCHECK_PROMPT.format(scenes=scenes, sources=sources))
+        if r.strip().startswith("```"):
+            r = r.split("```")[1]
+            if r.strip().startswith("json"):
+                r = r[4:]
+        d = json.loads(r)
+        problems = [str(p)[:160] for p in (d.get("problems") or [])][:4]
+        if d.get("ok", True) and not problems:
+            return True, []
+        return False, problems or ["checker flagged issues without specifics"]
+    except Exception as e:
+        comms.log(f"fact check failed (gate open): {str(e)[:60]}")
+        return True, []
+
+
+# Quality bars (2026-09 "quality-first" switch): a script must clear all
+# three gates before a render is spent on it. Both scorers fail OPEN at
+# 75 ("unscorable" on an API hiccup must never block production), so 75
+# is also the hook bar: an unscoreable hook passes, a real 74 does not.
+HOOK_MIN = 75
+RETENTION_MIN = 70
+QA_ATTEMPTS = 3
+
+
 def generate_script(direction=None):
-    """Write one script, then QA the hook: below 70 → one regeneration,
-    keep the better script. Scores are kept in the gist so the future
-    analytics loop can correlate hook style with retention."""
-    best = None
-    best_score = -1
+    """Quality-gated script factory: research → write → three gates
+    (hook strength, retention structure, fact check). Up to 3 attempts,
+    best script survives. Gates fail OPEN on API hiccups (a dead scorer
+    can't veto the day's video) but fail LOUD on real problems — the
+    warnings ride along on the script as _qa and surface in the queue
+    message, so a below-bar video is the owner's informed call, never a
+    silent one."""
     d = direction or state.STATE.get("topic_direction") or (
         "unsolved mysteries, strange science, history they never taught you")
     used = ", ".join(state.STATE.get("used_topics", [])[-40:]) or "none yet"
     research = _research(d, used)
-    for attempt in range(2):
-        script = _write_script(direction, research)
+    feedback = None          # last attempt's problems, fed to the next draft
+    best, best_q = None, -1
+    for _ in range(QA_ATTEMPTS):
+        script = _write_script(d, research, feedback=feedback)
         if not script:
             continue
-        score, reason = _score_hook(script)
+        hook, hook_reason = _score_hook(script)
+        ret, ret_reason = _score_retention(script)
+        facts_ok, problems = _fact_check(script, research)
         state.STATE.setdefault("hook_scores", []).append(
-            {"id": script.get("id"), "score": score, "reason": reason})
+            {"id": script.get("id"), "score": hook, "reason": hook_reason})
+        state.STATE.setdefault("retention_scores", []).append(
+            {"id": script.get("id"), "score": ret, "reason": ret_reason})
         del state.STATE["hook_scores"][:-200]
+        del state.STATE["retention_scores"][:-200]
         state.save_soon()
-        comms.log(f"hook score {score}: {reason}")
-        if score > best_score:
-            best, best_score = script, score
-        if score >= 70:
-            return script  # good enough — skip the second attempt
+        comms.log(f"QA: hook {hook} ({hook_reason}) · retention {ret} "
+                  f"({ret_reason}) · facts {'ok' if facts_ok else 'flagged'}")
+        script["_qa"] = {"hook": hook, "hook_reason": hook_reason,
+                         "retention": ret, "retention_reason": ret_reason,
+                         "facts": problems}
+        # a script is as good as its weakest gate; fact flags cost extra
+        q = min(hook, ret) - (15 if problems else 0)
+        if q > best_q:
+            best, best_q = script, q
+        if hook >= HOOK_MIN and ret >= RETENTION_MIN and not problems:
+            _pick_thumbnail(script)
+            return script
+        feedback = (problems[:4] if problems else
+                    [f"hook weakest at: {hook_reason}",
+                     f"retention weakest at: {ret_reason}"])
+    if best:
+        _pick_thumbnail(best)
     return best
+
+
+THUMB_PROMPT = """Design the YouTube thumbnail for this video.
+
+Title: "{title}"
+Hook (opening narration): "{hook}"
+
+A thumbnail is NOT the title repeated — it is one image plus a few words that make a scrolling stranger NEED to know. Draft 3 DIFFERENT concepts. Each:
+- "text": 2-4 WORDS, all-caps, punchy — opens a curiosity gap TOGETHER WITH the title (never repeats the title, never a sentence)
+- "concept": one line describing the picture — a concrete object/moment from the story, filmable, high contrast
+- "score": 0-100, on curiosity gap with the title, readability at small size, and image concreteness
+
+Respond with strict JSON only: {{"concepts": [{{"text": "...", "concept": "...", "score": 0}}, exactly 3]}}"""
+
+
+def _pick_thumbnail(script):
+    """Pick the thumbnail's overlay text + background concept (best of 3
+    LLM drafts, scored against the title). Stored on the script; the
+    worker's make_thumbnail renders it instead of the raw title. Fails
+    open — no key means the worker falls back to the title exactly as
+    before."""
+    try:
+        r = gemini(THUMB_PROMPT.format(
+            title=script.get("title", "")[:100],
+            hook=script.get("hook", "")[:400]))
+        if r.strip().startswith("```"):
+            r = r.split("```")[1]
+            if r.strip().startswith("json"):
+                r = r[4:]
+        d = json.loads(r)
+        best = max(d.get("concepts", []),
+                   key=lambda c: int(c.get("score", 0)), default=None)
+        if best and str(best.get("text", "")).strip():
+            script["thumbnail"] = {
+                "text": str(best["text"]).strip()[:40],
+                "concept": str(best.get("concept", "")).strip()[:200]}
+            comms.log(f"thumbnail concept: '{script['thumbnail']['text']}'")
+            return script["thumbnail"]
+    except Exception as e:
+        comms.log(f"thumbnail concepts failed (fallback to title): "
+                  f"{str(e)[:60]}")
+    return None
 
 
 def _parse_script(text):
@@ -245,11 +422,17 @@ def _parse_script(text):
         return None
 
 
-def _write_script(direction=None, research=None):
+def _write_script(direction=None, research=None, feedback=None):
     direction = direction or state.STATE.get("topic_direction") or (
         "unsolved mysteries, strange science, history they never taught you")
     used = ", ".join(state.STATE.get("used_topics", [])[-40:]) or "none yet"
     prompt = SCRIPT_PROMPT.format(direction=direction, used=used)
+    if feedback:
+        # the previous draft failed a quality gate — name the problems so
+        # the rewrite fixes them instead of re-rolling the same weaknesses
+        prompt += ("\n\nYOUR PREVIOUS DRAFT FAILED QUALITY REVIEW for these "
+                   "exact reasons — fix every one in this rewrite:\n- "
+                   + "\n- ".join(str(f) for f in feedback[:4]))
     if research:
         # the script is written FROM grounded research, not memory:
         # scene 'source' fields must cite these; facts must not contradict
@@ -292,9 +475,27 @@ def queue_next_video(n=1, direction=None):
         cloud.wake_soon("render")  # cloud runner starts within seconds
         state.STATE.setdefault("used_topics", []).append(script.get("id", "?"))
         state.save_soon()
-        comms.send(f"🎬 <b>New video queued</b> — {comms.esc(script['title'])}\n"
-                   f"({len(script['scenes'])} scenes, job <code>{job['id']}</code>)",
-                   html=True)
+        qa = script.get("_qa") or {}
+        warns = []
+        if qa.get("hook", 100) < HOOK_MIN:
+            warns.append(f"hook {qa['hook']}")
+        if qa.get("retention", 100) < RETENTION_MIN:
+            warns.append(f"retention {qa['retention']}")
+        if qa.get("facts"):
+            warns.append(f"{len(qa['facts'])} fact flag"
+                         f"{'s' if len(qa['facts']) != 1 else ''}")
+        msg = (f"🎬 <b>New video queued</b> — {comms.esc(script['title'])}\n"
+               f"({len(script['scenes'])} scenes, job <code>{job['id']}</code>)")
+        if warns:
+            # below the quality bar after 3 drafts — shipped anyway (the
+            # queue must never starve), but never silently
+            msg += (f"\n⚠️ <b>Passed with warnings</b> — {', '.join(warns)}"
+                    + (f". Top flag: {comms.esc(qa['facts'][0])}"
+                       if qa.get("facts") else ""))
+        if script.get("thumbnail"):
+            msg += (f"\n🖼 Thumbnail text: "
+                    f"<b>{comms.esc(script['thumbnail']['text'])}</b>")
+        comms.send(msg, html=True)
         made += 1
     return made
 
@@ -477,6 +678,20 @@ def learn_best_hour():
     return state.STATE.get("best_hour", 17)
 
 
+def next_publish_time(now_bd=None):
+    """The owner's ✅ lands the video in the channel's best hour rather
+    than the moment of the tap — YouTube sizes a video's reach from its
+    first hours, so those hours should be good ones. Today's slot if
+    it's still 45+ minutes out (YouTube rejects a publishAt in the
+    past), otherwise tomorrow's. Pure clock math, so it stays testable."""
+    now_bd = now_bd or (datetime.now() + config.BD_OFFSET)
+    hour = int(state.STATE.get("best_hour", 17))
+    slot = now_bd.replace(hour=hour, minute=0, second=0, microsecond=0)
+    if slot - now_bd < timedelta(minutes=45):
+        slot += timedelta(days=1)
+    return slot
+
+
 # ---------------------------------------------------------------------------
 # comments
 # ---------------------------------------------------------------------------
@@ -549,6 +764,12 @@ def post_reply(uid):
 # ---------------------------------------------------------------------------
 
 def title_check():
+    """Underperformer retitle — now ACTS instead of asking. A video that
+    is 48h+ old, under half the channel median AND under 100 views is
+    invisible either way, so the swap is near-zero-stakes: apply it,
+    then report loudly with the old title included (one Studio edit to
+    undo). One swap per video, ever — the ledger prevents daily
+    flip-flopping."""
     if state.STATE["settings"].get("paused"):
         return
     try:
@@ -561,10 +782,13 @@ def title_check():
     median = views[len(views) // 2]
     cutoff = (datetime.now() + config.BD_OFFSET
               - timedelta(hours=48)).strftime("%Y-%m-%d")
-    weak = [v for v in videos
-            if v["published"] <= cutoff and v["views"] < median * 0.5
-            and v["views"] < 100]
-    for v in weak[:2]:
+    swaps = state.STATE.setdefault("title_swaps", {})
+    for v in videos:
+        if v["id"] in swaps:
+            continue
+        if not (v["published"] <= cutoff and v["views"] < median * 0.5
+                and v["views"] < 100):
+            continue
         alt = gemini(
             f"This video is underperforming. Current title: "
             f'"{v["title"]}" ({v["views"]} views).\n'
@@ -573,15 +797,23 @@ def title_check():
         if not alt:
             continue
         alt = alt.strip().strip('"').split("\n")[0][:100]
-        uid = v["id"][:12]
-        state.STATE["pending_titles"][uid] = {
-            "video_id": v["id"], "title": alt}
-        comms.send_buttons(
-            f"📉 <b>Underperforming video</b>\n"
-            f"{comms.esc(v['title'])} — only {v['views']} views\n\n"
-            f"✏️ <b>Suggested new title:</b>\n{comms.esc(alt)}",
-            [[("✅ Update title", f"t:{uid}")],
-             [("❌ Keep", f"tx:{uid}")]])
+        if alt.strip().lower() == v["title"].strip().lower():
+            continue  # nothing to apply
+        try:
+            yt.update_title(v["id"], alt)
+        except Exception as e:
+            comms.log(f"title swap failed on {v['id']}: {str(e)[:60]}")
+            continue
+        swaps[v["id"]] = {"from": v["title"], "to": alt,
+                          "when": datetime.now().strftime("%Y-%m-%d")}
+        state.save_soon()
+        comms.send(
+            f"✏️ <b>Title auto-swapped</b> (underperformer)\n"
+            f"from: {comms.esc(v['title'])}\n"
+            f"to: {comms.esc(alt)}\n"
+            f"{v['views']} views after 48h+ — the new title gets a fresh "
+            f"shot at impressions. Undo: YouTube Studio → title.",
+            html=True)
 
 
 def apply_title(uid):

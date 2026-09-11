@@ -72,6 +72,14 @@ GITHUB_DISPATCH_TOKEN = os.environ.get("GITHUB_DISPATCH_TOKEN", "")
 
 BD_OFFSET = timedelta(hours=6)  # Render's clock is UTC; Bangladesh is UTC+6
 
+# Quality-first cadence (2026-09): the retention data said daily volume
+# wasn't buying growth — longs held ~2.5% vs shorts 12.3% — so the budget
+# moved from quantity to script quality (3 QA-gated drafts per topic).
+# Videos are planned only on these weekdays (0=Mon .. 6=Sun): Tue, Fri,
+# Sun = 3 videos/week. /next, /idea and the panel button still queue any
+# day by hand.
+PUBLISH_WEEKDAYS = (1, 4, 6)
+
 CHANNEL_NAME = os.environ.get("CHANNEL_NAME", "Mind Unfold")
 
 # Panel logins. The repo is PUBLIC, so the passwords live in the Render env

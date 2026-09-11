@@ -11,28 +11,39 @@ sources.
 
 ## How a video gets made
 
-1. **Planning (08:30)** — YouTube Analytics retention data plus a
-   strategist pass pick a fresh topic. Never a used one; retention is
-   weighted over raw views.
+1. **Planning (08:30, Tue/Fri/Sun)** — YouTube Analytics retention data
+   plus a strategist pass pick a fresh topic. Never a used one;
+   retention is weighted over raw views. Quality-first cadence: 3
+   videos a week, not 7 — the retention data said script quality, not
+   volume, was the constraint (`/next` and the panel button still queue
+   any day by hand).
 2. **Research** — real sources, chained by reliability: Gemini grounded
    search → Wikipedia API (keyless, datacenter-IP safe) → DuckDuckGo →
    groq/compound. Whichever answers first, the extraction prompt embeds
    the actual search results and every fact must cite one.
-3. **Script** — 8–12 scenes, a hook that is scored (retold opening,
-   curiosity gap, framing question), title alternatives, per-scene
-   Short narrations. Written by the big models only — lite fallback
-   models write 3-scene stubs, so script generation is routed past
-   them and a 503 falls straight to a full-size model.
+3. **Script, behind three gates** — 8–12 scenes built for the ear
+   (open loops every scene, re-hooks at act breaks, sentences under 14
+   words). Each draft is scored on hook strength, hold-ability and
+   fact-check against the research sources; a failed gate regenerates
+   with the problems named — up to 3 drafts, best ships. A draft that
+   still misses the bar ships with its warnings printed in the queue
+   message, never silently. The thumbnail's overlay text and image
+   concept are drafted 3× and scored against the title before the
+   render. Written by the big models only — lite fallback models write
+   3-scene stubs, so script generation is routed past them and a 503
+   falls straight to a full-size model.
 4. **Render** — a GitHub Actions runner wakes **within seconds** of the
    job being queued: edge-tts voiceover, Pexels visuals, on-screen
-   captions, chapters, a Pollinations thumbnail. One long-form, one
-   hook Short, plus standalone scene-Shorts.
+   captions, chapters, a thumbnail built from the scored concept. One
+   long-form, one hook Short, plus standalone scene-Shorts.
 5. **Upload, private-first** — every format lands on YouTube as
    **PRIVATE** immediately (a dying runner can never lose a finished
    video), then the Telegram preview arrives with ✅ Publish / ❌
-   Discard buttons. No time limit on the decision.
+   Discard buttons. No time limit on the decision. A ✅ schedules the
+   video public at the channel's best hour (17:00 until the data says
+   otherwise) — YouTube's own `publishAt` does the flip.
 6. **Learn** — per-video retention (longs vs shorts split) feeds the
-   next day's planner.
+   next planner.
 
 ## Architecture
 
@@ -41,7 +52,7 @@ flowchart TD
     subgraph BRAIN["Brain — Render free tier (this repo)"]
         PLAN[scheduler + planner]
         RES[grounded research]
-        SCR[script writer + hook QA]
+        SCR[script writer + 3 QA gates]
         QUEUE[job queue]
         PANEL["control panel /panel"]
         COMMS[Telegram console]
@@ -61,7 +72,7 @@ flowchart TD
     SCR -.-> LLM
     QUEUE -- "repository_dispatch\n(instant wake)" --> REN
     REN --> UPL --> YT
-    OWNER -- "✅ publish" --> YT
+    OWNER -- "✅ schedule best hour" --> YT
     COMMS <--> OWNER
     BRAIN <--> GIST
     WORKER -- "report + previews" --> BRAIN
@@ -85,9 +96,9 @@ flowchart TD
 | Time | Job |
 |---|---|
 | 08:00 | daily growth report (views, subs, retention, hook scores) |
-| 08:30 | analyze winners/losers → research → write script → queue render |
-| 09:00 | queue top-up — only if the pipeline is fully idle |
-| 12:00 | underperformer check → title suggestions |
+| Tue/Fri/Sun 08:30 | analyze winners/losers → research → gated script → queue render |
+| Tue/Fri/Sun 09:00 | queue top-up — only if the pipeline is fully idle |
+| 12:00 | underperformer check → title auto-swap (once per video, reported) |
 | Sundays 09:00 | weekly strategy summary |
 | every 4h | comment sweep → drafted replies await ✅ |
 
@@ -139,7 +150,7 @@ state.py          gist-backed state with deploy-overlap merge rules
 comms.py          Telegram console (reports, buttons, alerts)
 cloud.py          repository_dispatch — instant render-worker wakeups
 worker/           the render farm half (runs on GitHub Actions)
-selftest_*.py     7 offline test suites — no keys, no network
+selftest_*.py     8 offline test suites — no keys, no network
 ```
 
 ## Deploy the brain (Render)
@@ -200,6 +211,7 @@ python selftest_panel_login.py    # panel auth walls
 python selftest_panel_extras.py   # desk surfaces + failure alerts
 python selftest_analytics.py  # the analytics loop, faked end to end
 python selftest_script.py     # script writing + big-model routing
+python selftest_quality.py    # the 3 script gates + best-hour + title swaps
 python selftest_llm.py        # provider chain + keyless search parsers
 ```
 

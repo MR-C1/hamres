@@ -187,6 +187,32 @@ def main():
     check("junk thumbnail concepts -> no thumbnail key, script still ships",
           out is not None and "thumbnail" not in out)
 
+    # ---- 6b. custom topic: pinned, but style lessons ride along ----
+    brain = fresh()
+    brain.state.STATE["topic_direction"] = ("double down on maritime "
+                                            "mysteries, 8-10 minutes")
+    box = rig(brain, [script_json("s1"), scorer(85), scorer(80),
+                      FACTS_OK, THUMB])
+    out = brain.generate_script(
+        "Topic requested by the channel owner: the Voynich manuscript")
+    p = writes(box)[0]
+    check("custom topic pins the owner's topic",
+          out is not None and "Voynich manuscript" in p
+          and "never substitute" in p, True)
+    check("custom topic keeps the style guidance",
+          "maritime mysteries" in p, True)
+
+    brain = fresh()   # no standing guidance -> plain pass-through
+    brain.state.STATE["topic_direction"] = ""
+    box = rig(brain, [script_json("s1"), scorer(85), scorer(80),
+                      FACTS_OK, THUMB])
+    out = brain.generate_script(
+        "Topic requested by the channel owner: the Voynich manuscript")
+    check("custom topic with no guidance: no merge, no crash",
+          out is not None
+          and "Voynich manuscript" in writes(box)[0]
+          and "never substitute" not in writes(box)[0], True)
+
     # ---- 7. next_publish_time clock math ----
     brain = fresh()   # best_hour defaults to 17
     check("10:00 -> today 17:00",

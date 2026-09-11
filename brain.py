@@ -316,8 +316,22 @@ def generate_script(direction=None):
     warnings ride along on the script as _qa and surface in the queue
     message, so a below-bar video is the owner's informed call, never a
     silent one."""
-    d = direction or state.STATE.get("topic_direction") or (
-        "unsolved mysteries, strange science, history they never taught you")
+    guidance = state.STATE.get("topic_direction", "")
+    if direction:
+        # Owner's topic override (/idea, panel box): the topic is FIXED,
+        # but the growth analysis's style/format lessons still apply —
+        # they were earned from retention data, not topic taste, and
+        # dropping them would let a custom video repeat the channel's
+        # old mistakes.
+        d = direction
+        if guidance:
+            d += (f"\n(The topic above was requested by the channel owner "
+                  f"— research and write THIS topic, never substitute. The "
+                  f"channel's style and format lessons still apply: "
+                  f"{guidance})")
+    else:
+        d = guidance or ("unsolved mysteries, strange science, history "
+                         "they never taught you")
     used = ", ".join(state.STATE.get("used_topics", [])[-40:]) or "none yet"
     research = _research(d, used)
     feedback = None          # last attempt's problems, fed to the next draft

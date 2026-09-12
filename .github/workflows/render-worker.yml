@@ -16,6 +16,11 @@ on:
 jobs:
   render:
     runs-on: ubuntu-latest
+    # contents:write lets the runner's built-in GITHUB_TOKEN stage the
+    # finished Short as a release asset — the public URL Instagram's
+    # publishing API (and TikTok's draft upload) fetch the video from
+    permissions:
+      contents: write
     # cloud-only rendering: big jobs (8-12 min videos) need hours, not
     # minutes — GitHub hosted jobs cap at 6h; requires the repo to be
     # PUBLIC (unlimited Actions minutes; the private 2,000/month quota

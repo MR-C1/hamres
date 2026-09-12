@@ -325,6 +325,23 @@ def _upload_files(script, sid):
     msg = "; ".join(urls)
     if errors:
         msg += f" | upload FAILED: {'; '.join(errors)}"
+    # stage the hook Short at a public URL for the Instagram/TikTok
+    # cross-post (Instagram's API fetches from a URL — no file upload on
+    # the Instagram-Login path). Only when the YouTube upload worked:
+    # a failed batch has nothing worth cross-posting, and the retry will
+    # stage it. Actions-runner only; the PC worker has no GITHUB_TOKEN.
+    asset_urls = {}
+    if urls:
+        try:
+            import ghassets
+            if ghassets.available():
+                p = REVIEW / f"{sid}_short.mp4"
+                if p.exists():
+                    u = ghassets.upload(p, f"{sid}_short.mp4")
+                    if u:
+                        asset_urls["short"] = u
+        except Exception as e:
+            log.warning("asset staging failed: %s", e)
     # whatever uploaded rides the report — partial success still
     # registers a pending entry so the buttons work
     return {"video_url": urls[0] if urls else "",
@@ -332,6 +349,8 @@ def _upload_files(script, sid):
             "title": script["title"] if urls else "",
             "titles": titles,
             "format_urls": format_urls,
+            "asset_urls": asset_urls,
+            "description": str(meta.get("description", ""))[:500],
             "msg": msg}
 
 
@@ -426,6 +445,13 @@ def main():
         print("config.yaml missing [agent] url/secret — see SETUP_AGENT.md")
         return
     log.info("worker started — polling %s", agent["url"])
+    try:
+        # first order of business on every wake: keep the media-cache
+        # release from growing forever (30-day assets drop off here)
+        import ghassets
+        ghassets.prune()
+    except Exception:
+        pass
     empty_polls = 0
     while True:
         try:

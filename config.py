@@ -90,3 +90,27 @@ CHANNEL_NAME = os.environ.get("CHANNEL_NAME", "Mind Unfold")
 # the owner out of their own desk.
 PANEL_ADMIN_PASSWORD = os.environ.get("PANEL_ADMIN_PASSWORD", "")
 PANEL_VISITOR_PASSWORD = os.environ.get("PANEL_VISITOR_PASSWORD", "")
+
+# Instagram cross-posting (Reels) — "Instagram API with Instagram Login"
+# (graph.instagram.com). One-time setup, then the brain keeps the token
+# alive by refreshing it daily: convert the IG account to Professional
+# (Creator), create a Meta app with that product, run
+# extract_ig_token.py, and paste the two values into Render env. Posting
+# to your OWN account needs no App Review — review is only for posting
+# to other people's accounts.
+IG_USER_ID = os.environ.get("IG_USER_ID", "")
+IG_ACCESS_TOKEN = os.environ.get("IG_ACCESS_TOKEN", "")
+
+# TikTok cross-posting (drafts). TikTok's API forces unaudited apps to
+# private posting, and the audit needs a verified business entity — so
+# we automate the inbox/draft flow: the finished Short lands in the
+# owner's TikTok drafts and they tap publish. One-time setup:
+# developers.tiktok.com app with the Content Posting API product, run
+# extract_tiktok_token.py, paste the four values into Render env. The
+# refresh token ROTATES on every refresh — the brain stores each new one
+# in the gist, so never re-run the extract unless told to.
+TIKTOK_CLIENT_KEY = os.environ.get("TIKTOK_CLIENT_KEY", "")
+TIKTOK_CLIENT_SECRET = os.environ.get("TIKTOK_CLIENT_SECRET", "")
+TIKTOK_ACCESS_TOKEN = os.environ.get("TIKTOK_ACCESS_TOKEN", "")
+TIKTOK_REFRESH_TOKEN = os.environ.get("TIKTOK_REFRESH_TOKEN", "")
+TIKTOK_OPEN_ID = os.environ.get("TIKTOK_OPEN_ID", "")

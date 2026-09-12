@@ -170,7 +170,7 @@ state.py          gist-backed state with deploy-overlap merge rules
 comms.py          Telegram console (reports, buttons, alerts)
 cloud.py          repository_dispatch — instant render-worker wakeups
 worker/           the render farm half (runs on GitHub Actions)
-selftest_*.py     10 offline test suites — no keys, no network
+selftest_*.py     11 offline test suites — no keys, no network
 ```
 
 ## Deploy the brain (Render)
@@ -234,6 +234,7 @@ python selftest_script.py     # script writing + big-model routing
 python selftest_quality.py    # the 3 script gates + best-hour + title swaps
 python selftest_scenes.py     # scene-aware retention, end to end offline
 python selftest_loops.py      # demand mining + best-hour learner + swap verdicts
+python selftest_crosspost.py  # IG Reels + TikTok drafts, faked end to end
 python selftest_llm.py        # provider chain + keyless search parsers
 ```
 

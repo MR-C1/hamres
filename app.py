@@ -3276,6 +3276,12 @@ def report():
                 "video_url": data.get("video_url", ""),
                 "video_urls": urls,
                 "job_id": job_id,
+                # cross-post material: the staged public URL of the hook
+                # Short + the video description (a ready caption). A
+                # re-render retry that never re-uploads keeps the old
+                # entry, so only fill what the worker actually sent.
+                "asset_urls": data.get("asset_urls") or {},
+                "description": data.get("description", ""),
             }
             # scene-aware retention: the worker sends the long-form's
             # scene timings; keep them keyed by the long's video id so
@@ -3367,7 +3373,49 @@ def _publish_now(approval_id, note=""):
     comms.send(f"🗓 <b>Scheduled</b> — {comms.esc(p['title'][:60])}\n"
                f"Goes public {when:%a %d %b, %H:%M} BD (the best hour by "
                f"the numbers so far).\n{comms.esc(urls[0])}", html=True)
+    _cross_post(approval_id, p)
     return True
+
+
+def _cross_post(approval_id, p):
+    """Mirror the Short to Instagram (as a live Reel) and TikTok (as a
+    draft) right after the owner's ✅ — the same approval publishes
+    everywhere. Never raises, never blocks the YouTube schedule; every
+    outcome lands in Telegram so a silent failure is impossible."""
+    def report(emoji, platform, ok, detail):
+        comms.send(
+            f"{emoji} <b>{platform}</b> — "
+            + (f"Reel live: {comms.esc(detail)}"
+               if ok else f"skipped: {comms.esc(str(detail)[:180])}"),
+            html=True)
+
+    asset = (p.get("asset_urls") or {}).get("short")
+    caption = (p.get("description") or p.get("title") or "")[:2200]
+    if asset:
+        try:
+            import ig
+            if ig.configured():
+                ok, detail = ig.publish_reel(asset, caption)
+                report("📸", "Instagram", ok, detail)
+            else:
+                report("📸", "Instagram", False,
+                       "not configured (IG_USER_ID / IG_ACCESS_TOKEN)")
+        except Exception as e:
+            report("📸", "Instagram", False, e)
+        try:
+            import tiktok
+            if tiktok.configured():
+                ok, detail = tiktok.inbox_post(asset)
+                report("🎵", "TikTok", ok, detail)
+            else:
+                report("🎵", "TikTok", False,
+                       "not configured (TIKTOK_* env vars)")
+        except Exception as e:
+            report("🎵", "TikTok", False, e)
+    else:
+        report("📸", "Cross-post", False,
+               "no staged Short URL (render predates cross-posting, or "
+               "the PC worker rendered it)")
 
 
 def _delete_pending(approval_id):
@@ -3940,6 +3988,27 @@ def scheduler_loop():
         state.default_state()  # self-heal if a restart lost keys
         if not state.STATE["settings"].get("paused"):
             once_per_day("daily report", brain.daily_report, 8, 0)
+            # cross-post token keep-alive: IG's 60-day token resets once
+            # a day; TikTok's access token lives 24h and its refresh
+            # token rotates on every use — storing the rotation is the
+            # whole point of doing it here (env vars are read-only).
+            # Failures are silent (the cross-post itself reports loudly
+            # when a token is actually dead); the next day retries.
+            def _refresh_crosspost_tokens():
+                try:
+                    import ig
+                    if ig.configured():
+                        ig.refresh_token()
+                except Exception:
+                    pass
+                try:
+                    import tiktok
+                    if tiktok.configured():
+                        tiktok.refresh()
+                except Exception:
+                    pass
+            once_per_day("crosspost token refresh",
+                         _refresh_crosspost_tokens, 8, 10)
             # Quality-first cadence: planning + top-up run only on
             # publish days (config.PUBLISH_WEEKDAYS — Tue/Fri/Sun = 3
             # videos a week). The retention data said volume wasn't the

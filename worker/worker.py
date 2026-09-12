@@ -11,6 +11,7 @@ Run:   .venv\\Scripts\\python worker.py        (keep this window open)
 Auto:  run_worker.bat registered at logon (see SETUP_AGENT.md)
 """
 
+import json
 import os
 import re
 import shutil
@@ -121,6 +122,16 @@ def do_render(job):
     # upload right away — private, NEVER auto-scheduled public (only the
     # owner's ✅ makes a video public)
     up = _upload_files(script, sid)
+    # scene timings ride the report: the brain keeps them keyed by the
+    # LONG-form's video id, and later maps YouTube's retention curve
+    # onto them (scene-aware retention). Read before cleanup can touch it.
+    tl_path = REVIEW / f"{sid}_timeline.json"
+    timeline = None
+    try:
+        timeline = json.loads(
+            tl_path.read_text(encoding="utf-8")).get("scenes")
+    except Exception:
+        pass
     if up.get("video_url"):
         sent = send_video_preview(short, approval_id, script["title"],
                                   url=up.get("video_url"))
@@ -150,6 +161,10 @@ def do_render(job):
         "video_urls": up.get("video_urls", []),
         "uploaded": bool(up.get("video_url")),
         "msg": up.get("msg", "rendered"),
+        # scene-aware retention: the long-form's scene timings + which
+        # URL is the long (the report side keys the timeline by it)
+        "timeline": timeline,
+        "format_urls": up.get("format_urls", {}),
     }
     if not up.get("video_url"):
         # upload failed (dead token, YouTube's daily upload cap, ...). The
@@ -278,7 +293,7 @@ def _upload_files(script, sid):
         used.add(t)
         files[i] = (name, t)
 
-    urls, errors, titles = [], [], {}
+    urls, errors, titles, format_urls = [], [], [], {}
     # the duplicate-guard tells SHORT and LONG apart by duration bucket
     for name, title in files:
         f = REVIEW / name
@@ -290,6 +305,7 @@ def _upload_files(script, sid):
             url = upload.upload_video(
                 f, m, CFG, want_short="short" in name)
             urls.append(url)
+            format_urls[name.rsplit("_", 1)[-1].removesuffix(".mp4")] = url
             log.info("uploaded %s (%s) -> %s", f.name, title, url)
         except Exception as e:
             # one format failing must not kill the other: a partial
@@ -315,6 +331,7 @@ def _upload_files(script, sid):
             "video_urls": urls,
             "title": script["title"] if urls else "",
             "titles": titles,
+            "format_urls": format_urls,
             "msg": msg}
 
 
@@ -324,6 +341,7 @@ def _cleanup_files(sid):
     removed = 0
     for pattern in (f"{sid}_short.mp4", f"{sid}_long.mp4",
                     f"{sid}_metadata.txt", f"{sid}_thumb.png",
+                    f"{sid}_timeline.json",
                     f"{sid}_shortTEMP_MPY_wvf_snd.*",
                     f"{sid}_longTEMP_MPY_wvf_snd.*",
                     # per-block intermediates from the segmented renderer

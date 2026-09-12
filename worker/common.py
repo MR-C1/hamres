@@ -48,6 +48,24 @@ def setup_logging(name):
     return logging.getLogger(name)
 
 
+def build_timeline(blocks, durations):
+    """Per-scene start/end seconds for the long-form — the map that
+    YouTube's retention curve gets projected onto later (scene-aware
+    retention: WHICH scene lost the viewers, not just that the video
+    did). Same arithmetic as the description chapters, so the two can
+    never disagree: each block is its narration duration + the 0.35s
+    inter-block pause."""
+    out, t = [], 0.0
+    for bid, s in blocks:
+        d = durations.get(bid, 0.0) + 0.35
+        label = "Intro" if bid == "hook" else (
+            " ".join((s.get("narration") or "").split()[:6]) + "…")
+        out.append({"id": bid, "label": label[:60],
+                    "start": round(t, 1), "end": round(t + d, 1)})
+        t += d
+    return out
+
+
 def validate_script(script):
     """Make sure a queue JSON has everything the renderer needs."""
     required = ["id", "title", "hook", "scenes"]

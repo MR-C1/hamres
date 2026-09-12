@@ -128,3 +128,42 @@ def video_report(days=28):
     except Exception:
         pass
     return out, ("ok" if out else "empty")
+
+
+def retention_curve(video_id):
+    """The elapsed-time retention curve for ONE video: up to 100 points
+    of {elapsed, watching} — position in the video (0..1 of the
+    timeline) vs share of the audience still watching at that position
+    (rewinds can push it over 1.0). This is the curve YouTube Studio
+    draws; it is what makes scene-aware retention possible (project it
+    onto the scene timeline and each scene's drop becomes visible).
+
+    Same error contract as video_report: returns (points, reason) and
+    never raises. reason "empty" also covers too-few-points curves
+    (a video with barely any views returns a sparse or empty set)."""
+    from datetime import date, timedelta
+    end = date.today() - timedelta(days=2)
+    start = end - timedelta(days=28)
+    try:
+        r = get_service().reports().query(
+            ids="channel==MINE",
+            startDate=start.isoformat(), endDate=end.isoformat(),
+            metrics="audienceWatchRatio",
+            dimensions="elapsedVideoTimeRatio",
+            filters=f"video=={video_id}",
+            sort="elapsedVideoTimeRatio", maxResults=100).execute()
+    except Exception as e:
+        return [], _classify(e)
+    headers = [c["name"] for c in r.get("columnHeaders", [])]
+    pts = []
+    for row in r.get("rows", []):
+        d = dict(zip(headers, row))
+        try:
+            elapsed = float(d["elapsedVideoTimeRatio"])
+            watching = float(d["audienceWatchRatio"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if 0 < elapsed <= 1 and watching >= 0:
+            pts.append({"elapsed": elapsed, "watching": watching})
+    pts.sort(key=lambda p: p["elapsed"])
+    return pts, ("ok" if len(pts) >= 10 else "empty")

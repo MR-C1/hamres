@@ -124,6 +124,12 @@ def my_videos(max_results=30):
                 # long vs short split for the analytics loop
                 "duration_s": _iso_dur(item.get("contentDetails", {})
                                        .get("duration", "")),
+                # scene-timeline backfill: the renderer writes each
+                # long-form's scene timings into its description as a
+                # TIMESTAMPS block, so the whole back catalogue can get
+                # scene-aware retention without re-rendering anything
+                "description": (item.get("snippet", {})
+                                .get("description") or "")[:1500],
             })
         return out
     return _with_retries(once)

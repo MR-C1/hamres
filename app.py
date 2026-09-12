@@ -779,6 +779,10 @@ body[data-role="visitor"] .field input{pointer-events:none;background:var(--wash
       <tbody id="retrows"></tbody>
     </table></div>
   </div>
+  <!-- Scene watch: the retention curve mapped onto each long-form's scene
+       timeline — which exact scene lost the audience. Empty until a film
+       has 50+ views and a stored timeline. -->
+  <div class="card" id="scenecard" hidden></div>
 
   <div class="sec"><h2>Render queue</h2><span class="note" id="queuenote"></span></div>
   <div class="card" style="padding:4px 18px">
@@ -1588,6 +1592,7 @@ function render(){
 
   /* retention + system: painted fresh each pass, cheap string work */
   paintRetention(ana);
+  paintScenes(d.scenes);
   paintHealth(d.health, ana);
 
   /* jobs */
@@ -2236,6 +2241,34 @@ function paintRetention(ana){
   }
 }
 
+/* ---- scene watch: which exact scene lost the audience ----
+   The retention curve, mapped onto each long-form's scene timeline. The
+   planner consumes the same findings; this is the owner's eye on them. */
+function paintScenes(scenes){
+  const card = $("scenecard");
+  if (!card) return;
+  scenes = scenes || [];
+  if (!scenes.length) { card.hidden = true; return; }
+  card.hidden = false;
+  card.innerHTML =
+    '<h3 style="font:600 17px/1.2 var(--serif);margin:14px 0 2px">Scene watch</h3>'+
+    '<div style="font:12.5px/1.5 var(--sans);color:var(--muted);margin-bottom:6px">'+
+      'The retention curve mapped onto each film\'s scenes — where viewers actually left.</div>'+
+    '<div class="tblwrap"><table class="rtable" aria-label="Scene retention findings"><tbody>'+
+    scenes.map(s => {
+      const drop = s.drop, strong = s.strong;
+      return '<tr><td class="lead">'+esc(s.title)+'</td>'+
+        '<td>'+(drop
+          ? '<span class="st st-fail"><span class="dot"></span>left at</span> '+esc(drop.t)+' <b>−'+Math.round(drop.v)+'%</b>'
+          : '<span style="color:var(--muted)">no drop-off above threshold</span>')+'</td>'+
+        '<td>'+(strong
+          ? '<span class="st st-done"><span class="dot"></span>held at</span> '+esc(strong.t)
+          : '')+'</td></tr>';
+    }).join("")+
+    '</tbody></table></div>';
+  headIf(card.querySelector("tbody"));
+}
+
 /* ---- system health: a wiring diagram, not a keyring ---- */
 function paintHealth(h, ana){
   h = h || {};
@@ -2727,6 +2760,13 @@ def api_state():
         "direction": state.STATE.get("topic_direction", ""),
         "used_topics": state.STATE.get("used_topics", [])[-25:],
         "best_hour": state.STATE.get("best_hour", 17),
+        # scene-aware retention: one compact finding per mapped film
+        "scenes": [{"id": vid, "title": (s.get("title") or "?")[:50],
+                    "drop": _scene_finding(s).get("drop"),
+                    "strong": _scene_finding(s).get("strong"),
+                    "when": s.get("when", "")}
+                   for vid, s in state.STATE.get("scene_retention", {})
+                   .items()][-12:],
         "sched": sorted(state.STATE.get("scheduler_ran", {}).keys()),
         "log": comms.LOG[-30:],
         # the learning loop's eyes: retention per video + longs/shorts split
@@ -2755,6 +2795,22 @@ def _bg(name, fn):
     background, report through the log + Telegram + the output mailbox.
     """
     threading.Thread(target=run_safely, args=(name, fn), daemon=True).start()
+
+
+def _scene_finding(snapshot):
+    """Compact worst-drop / strongest-hold labels for the panel's scene
+    list (the full per-scene rows live in Telegram + the gist)."""
+    out = {}
+    for sc in snapshot.get("scenes", []):
+        sig = sc.get("signal")
+        if sig == "drop_off" and (not out.get("drop")
+                                  or sc["drop"] > out["drop"]["v"]):
+            out["drop"] = {"v": sc.get("drop", 0),
+                           "t": (sc.get("label") or "")[:40]}
+        if sig in ("rewatch", "strong_hold") and not out.get("strong"):
+            out["strong"] = {"v": sc.get("peak", 0),
+                             "t": (sc.get("label") or "")[:40]}
+    return out
 
 
 def _panel_out(kind, text):
@@ -3206,6 +3262,23 @@ def report():
                 "video_urls": urls,
                 "job_id": job_id,
             }
+            # scene-aware retention: the worker sends the long-form's
+            # scene timings; keep them keyed by the long's video id so
+            # the daily scene-watch can map YouTube's retention curve
+            # onto them once the video is public
+            tl = data.get("timeline")
+            long_url = (data.get("format_urls") or {}).get("long", "")
+            if tl and long_url:
+                lvid = long_url.rstrip("/").split("/")[-1]
+                state.STATE.setdefault("scene_timelines", {})[lvid] = {
+                    "title": data.get("title", ""),
+                    "scenes": tl[:20],
+                    "source": "render",
+                    "when": f"{datetime.now() + config.BD_OFFSET:%Y-%m-%d}"}
+                tls = state.STATE["scene_timelines"]
+                if len(tls) > 80:
+                    for k in list(tls)[:-80]:
+                        del tls[k]
             state.save_soon()
             # a ✅/❌ tapped on the preview before this report arrived
             early = state.STATE.setdefault("early_decisions", {}).pop(

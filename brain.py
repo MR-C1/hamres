@@ -555,6 +555,11 @@ def daily_report():
                      f"— {best['views']:,} views")
     lines += _retention_lines(pub)
     comms.send("\n".join(lines), html=True)
+    # scene-aware retention: harvest timelines from any newly published
+    # long-forms' chapters, then map curves onto them (own message only
+    # when a finding exists — never raises, never costs the report)
+    backfill_timelines(pub)
+    scene_retention_pass(pub)
 
 
 def _retention_lines(pub):
@@ -667,9 +672,13 @@ def analyze_and_plan():
     _maybe_nag_analytics(reason)
     summary = "\n".join(_plan_rows(videos, report))
     has_retention = bool(report)
+    backfill_timelines(videos)   # idempotent — in case the report missed
+    scene_lessons = _scene_lesson_lines()
     guidance = gemini(f"""Channel stats for our facts/mystery channel:
 
 {summary}
+
+{("SCENE-LEVEL RETENTION FINDINGS — mapped from YouTube's retention curve onto each film's scenes. This is the strongest evidence you have; make the pacing/structure guidance concrete and cite these findings:" + chr(10) + chr(10).join(scene_lessons)) if scene_lessons else ""}
 
 Analyze like a professional YouTube strategist:
 1. Which topics/styles CLEARLY outperform? Which underperform?
@@ -690,6 +699,240 @@ def learn_best_hour():
     # simple version for now — history-based refinement can be added once
     # the channel has 2+ weeks of data
     return state.STATE.get("best_hour", 17)
+
+
+# ---------------------------------------------------------------------------
+# scene-aware retention — WHICH scene loses the viewers
+# ---------------------------------------------------------------------------
+
+# A curve from a video with a handful of views is noise shaped like a
+# curve. Below this many views the mapping is skipped (and retried once
+# the count grows).
+SCENE_VIEWS_MIN = 50
+
+
+def parse_chapters(description):
+    """Rebuild a scene timeline from a published video's TIMESTAMPS
+    block — the renderer writes one into every long-form description,
+    so the existing catalogue gets scene analysis without re-rendering.
+    Returns [{'id', 'label', 'start', 'end'}] (last end filled by the
+    caller from the real duration), or [] when there is nothing usable."""
+    scenes = []
+    in_block = False
+    for line in (description or "").splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        if text.upper() == "TIMESTAMPS":
+            in_block = True
+            continue
+        if not in_block:
+            continue
+        m = re.match(r"^(\d+):(\d{2})\s+(.+)$", text)
+        if not m:
+            # a non-chapter line ends the block (hashtags, subscribe
+            # lines ride after it in the description)
+            if scenes:
+                break
+            continue
+        start = int(m.group(1)) * 60 + int(m.group(2))
+        if scenes and start <= scenes[-1]["start"]:
+            continue          # YouTube-style junk or a duplicate stamp
+        scenes.append({"id": f"chapter{len(scenes)}",
+                       "label": m.group(3).strip()[:60],
+                       "start": float(start), "end": None})
+    return scenes if len(scenes) >= 4 else []
+
+
+def backfill_timelines(videos):
+    """Harvest scene timelines from the descriptions of already-published
+    long-forms. Runs alongside the render-time capture ({sid}_timeline.json
+    rides the worker report), so both the back catalogue and every new
+    video end up in STATE['scene_timelines'] keyed by video id."""
+    tls = state.STATE.setdefault("scene_timelines", {})
+    made = 0
+    for v in videos:
+        if v.get("id") in tls or v.get("duration_s", 0) < 180:
+            continue
+        scenes = parse_chapters(v.get("description", ""))
+        if not scenes:
+            continue
+        scenes[-1]["end"] = float(v["duration_s"])
+        tls[v["id"]] = {"title": v["title"], "scenes": scenes,
+                        "source": "chapters",
+                        "when": datetime.now().strftime("%Y-%m-%d")}
+        made += 1
+    if len(tls) > 80:      # oldest entries (insertion order) fall off
+        for k in list(tls)[:-80]:
+            del tls[k]
+    if made:
+        state.save_soon()
+        comms.log(f"scene timelines backfilled from chapters: {made}")
+    return made
+
+
+def classify_scene(drop, step, peak, n_points):
+    """One scene's verdict from its curve slice. drop = percentage points
+    of the audience lost inside the scene; step = the sharpest single
+    point-to-point loss; peak = highest watching share seen inside it
+    (>100 means people rewound to rewatch). Thresholds deliberately
+    coarse — the numbers are small, the signal is what matters."""
+    if n_points < 2:
+        return "thin"       # not enough curve inside this scene to judge
+    if drop >= 8 or step >= 10:
+        return "drop_off"
+    if peak >= 105:
+        return "rewatch"
+    if drop <= 4:
+        return "strong_hold"
+    return "steady"
+
+
+def map_scene_retention(scenes, points, duration_s):
+    """Project YouTube's retention curve onto a scene timeline. Pure
+    function — the math must be checkable offline. The timeline's
+    block-math durations get rescaled to the video's REAL duration (the
+    render adds an end card and encoder slack), exactly the way the
+    chapters in the description already are. Returns
+    [{id, label, start, end, drop, step, peak, signal}] for scenes that
+    contain at least one curve point."""
+    if not scenes or len(points) < 10 or not duration_s:
+        return []
+    last_end = scenes[-1].get("end") or 0.0
+    scale = (duration_s / last_end) if last_end > 0 else 1.0
+    out = []
+    for i, sc in enumerate(scenes):
+        s0 = sc.get("start", 0.0) * scale
+        s1 = (sc.get("end") or duration_s) * scale
+        inside = [p for p in points
+                  if p["elapsed"] * duration_s > s0
+                  and (p["elapsed"] * duration_s <= s1
+                       or i == len(scenes) - 1)]
+        if not inside:
+            continue
+        drop = 100.0 * (inside[0]["watching"] - inside[-1]["watching"])
+        step = max((100.0 * (a["watching"] - b["watching"])
+                    for a, b in zip(inside, inside[1:])), default=0.0)
+        peak = 100.0 * max(p["watching"] for p in inside)
+        out.append({
+            "id": sc.get("id", ""), "label": sc.get("label", ""),
+            "start": sc.get("start", 0.0), "end": sc.get("end"),
+            "drop": round(drop, 1), "step": round(step, 1),
+            "peak": round(peak, 1),
+            "signal": classify_scene(drop, step, peak, len(inside))})
+    return out
+
+
+def _scene_summary(mapped):
+    """The one-line verdicts worth reporting: worst drop-off and strongest
+    hold, ignoring 'thin' scenes."""
+    scored = [s for s in mapped if s["signal"] != "thin"]
+    drop = max((s for s in scored if s["signal"] == "drop_off"),
+               key=lambda s: s["drop"], default=None)
+    rewatch = max((s for s in scored if s["signal"] == "rewatch"),
+                  key=lambda s: s["peak"], default=None)
+    hold = max((s for s in scored if s["signal"] == "strong_hold"),
+               key=lambda s: -s["drop"], default=None)
+    return drop, (rewatch or hold)
+
+
+def scene_retention_pass(videos):
+    """Daily scene-watch: for every long-form with a stored timeline,
+    fetch its retention curve, map it onto the scenes, store the
+    snapshot. First snapshots with a real finding are reported; refreshes
+    (views doubled since last snapshot, at most every 3 days) update
+    quietly. Never raises — a refused curve just skips that video."""
+    tls = state.STATE.get("scene_timelines", {})
+    if not tls:
+        return
+    snaps = state.STATE.setdefault("scene_retention", {})
+    today = datetime.now().strftime("%Y-%m-%d")
+    for v in videos:
+        vid = v.get("id")
+        tl = tls.get(vid)
+        if not tl or v.get("duration_s", 0) < 180:
+            continue
+        views = v.get("views", 0)
+        if views < SCENE_VIEWS_MIN:
+            continue          # too few viewers for the curve to mean anything
+        old = snaps.get(vid)
+        if old:
+            # refresh only when the audience has meaningfully grown —
+            # the curve's shape stabilizes, the refetches must not spam
+            days = (datetime.now() - datetime.strptime(
+                old.get("when") or "2000-01-01", "%Y-%m-%d")).days
+            if not (views >= 2 * old.get("views", 0) and days >= 3):
+                continue
+        try:
+            points, reason = yt_analytics.retention_curve(vid)
+        except Exception as e:
+            comms.log(f"scene curve failed on {vid}: {str(e)[:60]}")
+            continue
+        if reason != "ok":
+            continue
+        mapped = map_scene_retention(tl["scenes"], points,
+                                     v["duration_s"])
+        if not mapped:
+            continue
+        snaps[vid] = {"title": v["title"], "scenes": mapped,
+                      "views": views, "when": today}
+        if len(snaps) > 40:
+            for k in list(snaps)[:-40]:
+                del snaps[k]
+        state.save_soon()
+        drop, strong = _scene_summary(mapped)
+        if not old and drop:
+            # first snapshot with a real drop-off — this is the finding
+            # the whole feature exists for
+            comms.send(
+                f"🔍 <b>Scene watch</b> — {comms.esc(v['title'][:50])}\n"
+                f"Viewers left at <b>{comms.esc(drop['label'])}</b> "
+                f"(−{drop['drop']:.0f}% of the audience inside that scene"
+                + (f"; strongest: {comms.esc(strong['label'])}"
+                   if strong else "") + ")",
+                html=True)
+        elif not old:
+            comms.log(f"scene snapshot stored for {vid} (no drop-off "
+                      f"above threshold)")
+
+
+def _scene_lesson_lines():
+    """Scene-level evidence for the strategist prompt: concrete findings
+    from the stored snapshots, plus one aggregate pacing lesson (how
+    long the scenes that LOSE viewers run vs the ones that hold)."""
+    snaps = state.STATE.get("scene_retention", {})
+    lines = []
+    for vid, s in list(snaps.items())[-8:]:
+        drop, strong = _scene_summary(s.get("scenes", []))
+        if drop:
+            lines.append(
+                f'- "{s.get("title", "?")[:40]}": viewers left at '
+                f'"{drop["label"]}" (lost {drop["drop"]:.0f}% inside '
+                f'that scene)'
+                + (f'; held best at "{strong["label"]}"'
+                   if strong else ""))
+    if len(lines) < 2:
+        return []
+    # aggregate pacing: drop-off scenes vs strong-hold scenes, by length
+    def _dur(sc):
+        return (sc.get("end") or 0) - (sc.get("start") or 0)
+    drops, holds = [], []
+    for s in snaps.values():
+        for sc in s.get("scenes", []):
+            d = _dur(sc)
+            if d <= 0:
+                continue
+            if sc["signal"] == "drop_off":
+                drops.append(d)
+            elif sc["signal"] == "strong_hold":
+                holds.append(d)
+    if drops and holds:
+        lines.append(
+            f"(pattern across films: scenes that lose viewers average "
+            f"{sum(drops) / len(drops):.0f}s; scenes that hold average "
+            f"{sum(holds) / len(holds):.0f}s — pace future scenes "
+            f"accordingly)")
+    return lines
 
 
 def next_publish_time(now_bd=None):

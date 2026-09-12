@@ -19,8 +19,8 @@ import archives
 import tts as tts_mod
 import visuals
 from captions import render_caption_images
-from common import (ASSETS, CACHE, REVIEW, load_config, setup_logging,
-                    validate_script)
+from common import (ASSETS, CACHE, REVIEW, build_timeline, load_config,
+                    setup_logging, validate_script)
 
 log = setup_logging("render")
 
@@ -607,6 +607,11 @@ def render_from_dict(script, config):
         blocks = pick_scenes(script, fmt, durations)
         if fmt == "long":
             blocks_long = blocks
+            # scene timings for the retention mapping — written before any
+            # rendering starts, so even a crashed render leaves the map
+            (REVIEW / f"{sid}_timeline.json").write_text(
+                json.dumps({"scenes": build_timeline(blocks, durations)},
+                           ensure_ascii=False), encoding="utf-8")
         portrait = "short" in fmt  # hook-Short and scene-Shorts alike
 
         # RESUME: a format whose output already exists and fully decodes

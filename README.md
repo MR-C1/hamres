@@ -43,7 +43,15 @@ sources.
    video public at the channel's best hour (17:00 until the data says
    otherwise) — YouTube's own `publishAt` does the flip.
 6. **Learn** — per-video retention (longs vs shorts split) feeds the
-   next planner.
+   next planner. Scene-aware retention goes deeper: the renderer stores
+   each long-form's scene timings, the daily scene-watch fetches
+   YouTube's retention curve and maps it onto them — so the report says
+   *which scene* lost the viewers, not just that the video did. The
+   back catalogue is harvested from the TIMESTAMPS chapters already in
+   every published description, so existing films get scene analysis
+   without re-rendering. Findings ride the strategist prompt as
+   concrete evidence (drop-off scenes vs hold scenes, and their average
+   lengths), and land in Telegram + the panel's Scene watch table.
 
 ## Architecture
 
@@ -95,7 +103,7 @@ flowchart TD
 
 | Time | Job |
 |---|---|
-| 08:00 | daily growth report (views, subs, retention, hook scores) |
+| 08:00 | daily growth report (views, subs, retention, hook scores) + scene watch |
 | Tue/Fri/Sun 08:30 | analyze winners/losers → research → gated script → queue render |
 | Tue/Fri/Sun 09:00 | queue top-up — only if the pipeline is fully idle |
 | 12:00 | underperformer check → title auto-swap (once per video, reported) |
@@ -150,7 +158,7 @@ state.py          gist-backed state with deploy-overlap merge rules
 comms.py          Telegram console (reports, buttons, alerts)
 cloud.py          repository_dispatch — instant render-worker wakeups
 worker/           the render farm half (runs on GitHub Actions)
-selftest_*.py     8 offline test suites — no keys, no network
+selftest_*.py     9 offline test suites — no keys, no network
 ```
 
 ## Deploy the brain (Render)
@@ -212,6 +220,7 @@ python selftest_panel_extras.py   # desk surfaces + failure alerts
 python selftest_analytics.py  # the analytics loop, faked end to end
 python selftest_script.py     # script writing + big-model routing
 python selftest_quality.py    # the 3 script gates + best-hour + title swaps
+python selftest_scenes.py     # scene-aware retention, end to end offline
 python selftest_llm.py        # provider chain + keyless search parsers
 ```
 

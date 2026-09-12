@@ -124,6 +124,11 @@ def my_videos(max_results=30):
                 # long vs short split for the analytics loop
                 "duration_s": _iso_dur(item.get("contentDetails", {})
                                        .get("duration", "")),
+                # full publish timestamp for the best-hour learner: the
+                # scheduled go-public time when there is one (publishedAt
+                # is the UPLOAD moment — often hours earlier and private)
+                "published_ts": (item.get("status", {}).get("publishAt")
+                                 or item["snippet"]["publishedAt"]),
                 # scene-timeline backfill: the renderer writes each
                 # long-form's scene timings into its description as a
                 # TIMESTAMPS block, so the whole back catalogue can get

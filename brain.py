@@ -554,7 +554,15 @@ def daily_report():
         lines.append(f"Top video: {comms.esc(best['title'][:60])} "
                      f"— {best['views']:,} views")
     lines += _retention_lines(pub)
+    wants = [f"{r['topic']} ({r['count']})"
+             for r in state.STATE.get("audience_requests", [])
+             if r.get("count", 0) >= 2][:3]
+    if wants:
+        lines.append("💬 Asked for: " + comms.esc(", ".join(wants)))
     comms.send("\n".join(lines), html=True)
+    # the learning loops' fuel: per-video daily views (best-hour learner)
+    record_video_history(pub)
+    learn_best_hour(pub)
     # scene-aware retention: harvest timelines from any newly published
     # long-forms' chapters, then map curves onto them (own message only
     # when a finding exists — never raises, never costs the report)
@@ -674,11 +682,14 @@ def analyze_and_plan():
     has_retention = bool(report)
     backfill_timelines(videos)   # idempotent — in case the report missed
     scene_lessons = _scene_lesson_lines()
+    audience = _audience_lines()
     guidance = gemini(f"""Channel stats for our facts/mystery channel:
 
 {summary}
 
 {("SCENE-LEVEL RETENTION FINDINGS — mapped from YouTube's retention curve onto each film's scenes. This is the strongest evidence you have; make the pacing/structure guidance concrete and cite these findings:" + chr(10) + chr(10).join(scene_lessons)) if scene_lessons else ""}
+
+{("AUDIENCE REQUESTS — topics viewers explicitly asked for in the comments (count = distinct askers). These are strong candidates when they fit the channel's voice:" + chr(10) + chr(10).join(audience)) if audience else ""}
 
 Analyze like a professional YouTube strategist:
 1. Which topics/styles CLEARLY outperform? Which underperform?
@@ -693,12 +704,100 @@ Respond with just the analysis and direction, no preamble.""")
     queue_next_video(1)
 
 
-def learn_best_hour():
-    """From stats history, when do videos posted at hour H get the most
-    next-day views? Fallback: keep 17:00. (Data accumulates over weeks.)"""
-    # simple version for now — history-based refinement can be added once
-    # the channel has 2+ weeks of data
-    return state.STATE.get("best_hour", 17)
+def record_video_history(videos):
+    """One views-snapshot row per public video per day — the fuel the
+    best-hour learner runs on. Rows are [date, views]; same-day calls
+    update in place instead of stacking. Kept bounded: 30 rows per
+    video, 60 videos."""
+    hist = state.STATE.setdefault("video_history", {})
+    today = f"{datetime.now() + config.BD_OFFSET:%Y-%m-%d}"
+    changed = False
+    for v in videos:
+        if v.get("privacy") == "private":
+            continue
+        rows = hist.setdefault(v["id"], [])
+        if not rows or rows[-1][0] != today or rows[-1][1] != v["views"]:
+            if rows and rows[-1][0] == today:
+                rows[-1][1] = v["views"]
+            else:
+                rows.append([today, v["views"]])
+            changed = True
+        del rows[:-30]
+    if len(hist) > 60:
+        for k in sorted(hist, key=lambda k: hist[k][-1][0])[:-60]:
+            del hist[k]
+    if changed:
+        state.save_soon()
+
+
+def _hour_buckets(videos, hist, now_bd=None):
+    """Group each public video's early velocity (views at the first
+    snapshot 3+ days after it went public) by its publish HOUR (BD
+    clock). Pure — the learner's math must be checkable offline.
+    Returns {hour: [velocities]}."""
+    now_bd = now_bd or (datetime.now() + config.BD_OFFSET)
+    buckets = {}
+    for v in videos:
+        ts = v.get("published_ts") or ""
+        rows = hist.get(v["id"]) or []
+        if not ts or not rows or v.get("privacy") != "public":
+            continue
+        try:
+            # drop the UTC offset before adding BD_OFFSET — mixing an
+            # aware pub time with a naive now() raises TypeError
+            pub = datetime.fromisoformat(
+                ts.replace("Z", "+00:00")).replace(tzinfo=None) \
+                + config.BD_OFFSET
+        except ValueError:
+            continue
+        if (now_bd - pub).days < 4:
+            continue          # too young for a 3-day reading
+        vel = None
+        for d, views in rows:
+            if (datetime.strptime(d, "%Y-%m-%d") - pub).days >= 3:
+                vel = views
+                break
+        if vel is None:
+            continue
+        buckets.setdefault(pub.hour, []).append(vel)
+    return buckets
+
+
+def _median(xs):
+    xs = sorted(xs)
+    n = len(xs)
+    return xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2
+
+
+def learn_best_hour(videos=None):
+    """The real best-hour learner (was a stub returning the stored 17).
+    Median early velocity per publish hour, from the daily per-video
+    snapshots; an hour needs 3+ videos before it can win, and it must
+    beat the current hour by 20% before the channel moves — one lucky
+    video at 2am shouldn't reschedule everything. A move is stored AND
+    announced, because every future ✅ silently changes hour with it."""
+    cur = int(state.STATE.get("best_hour", 17))
+    if videos is None:
+        return cur           # nothing to learn from (e.g. tests, offline)
+    buckets = _hour_buckets(videos, state.STATE.get("video_history", {}))
+    ranked = {h: _median(vs) for h, vs in buckets.items() if len(vs) >= 3}
+    if not ranked:
+        return cur
+    best = max(ranked, key=ranked.get)
+    if best == cur:
+        return cur
+    cur_med = ranked.get(cur)
+    if cur_med is None or ranked[best] >= cur_med * 1.2:
+        state.STATE["best_hour"] = best
+        state.save_soon()
+        comms.send(
+            f"🕒 <b>Best hour moved: {cur}:00 → {best}:00 BD</b>\n"
+            f"Videos published at {best}:00 average "
+            f"{ranked[best]:.0f} views in their first days vs "
+            f"{cur_med:.0f} at {cur}:00. New approvals schedule there "
+            f"from now on.", html=True)
+        return best
+    return cur
 
 
 # ---------------------------------------------------------------------------
@@ -970,6 +1069,10 @@ def comment_sweep():
         return
     if not comments:
         return
+    # audience-demand mining rides the sweep: every NEW comment gets one
+    # tiny "is this a topic request?" pass, and repeated asks become
+    # planner candidates (see _mine_requests)
+    _mine_requests(comments)
 
     titles = {v["id"]: v["title"] for v in recent}
     shown = 0
@@ -1017,6 +1120,76 @@ def post_reply(uid):
 
 
 # ---------------------------------------------------------------------------
+# audience-demand mining — the comments are free topic research
+# ---------------------------------------------------------------------------
+
+MINE_PROMPT = """A viewer comment on a documentary YouTube channel (unsolved mysteries, strange science, hidden history).
+
+Comment: "{text}"
+
+Does the viewer explicitly ask for a specific topic or video ("do a video on X", "please cover X", "more about X")? Reply with strict JSON only: {{"topic": "<the topic in 2-5 words>"}}, or {{"topic": null}} if it is not a request."""
+
+
+def _mine_requests(comments):
+    """A repeated ask in the comments is the cheapest topic research
+    there is. One tiny LLM call per NEW comment (the mined ledger keeps
+    it to once ever per comment); each request bumps its counter, and
+    the planner sees the whole list every planning run. The second ask
+    for the same topic tells the owner — one ask is an anecdote, two is
+    a queue. Fails open; a mining hiccup just skips that comment."""
+    mined = state.STATE.setdefault("mined_comments", [])
+    reqs = state.STATE.setdefault("audience_requests", [])
+    today = f"{datetime.now() + config.BD_OFFSET:%Y-%m-%d}"
+    for c in comments:
+        if c["comment_id"] in mined:
+            continue
+        mined.append(c["comment_id"])
+        topic = None
+        try:
+            r = gemini(MINE_PROMPT.format(text=c["text_plain"][:300]))
+            if r.strip().startswith("```"):
+                r = r.split("```")[1]
+                if r.strip().startswith("json"):
+                    r = r[4:]
+            topic = str(json.loads(r).get("topic") or "").strip() or None
+        except Exception:
+            topic = None       # fail open — not a request as far as we know
+        if not topic:
+            continue
+        key = " ".join(re.findall(r"[a-z0-9]+", topic.lower()))
+        if not key:
+            continue
+        entry = next((e for e in reqs if e.get("key") == key), None)
+        if entry:
+            entry["count"] += 1
+            if c["author"] not in entry.get("askers", []):
+                entry.setdefault("askers", []).append(c["author"])
+                del entry["askers"][:-8]
+            entry["last"] = today
+            entry["topic"] = topic[:60]
+        else:
+            entry = {"topic": topic[:60], "key": key, "count": 1,
+                     "askers": [c["author"]], "last": today}
+            reqs.append(entry)
+            del reqs[:-40]
+        if entry["count"] == 2:
+            comms.send(f"💬 <b>Viewers keep asking for:</b> "
+                       f"{comms.esc(entry['topic'])} — it's on the "
+                       f"planner's candidate list now.", html=True)
+        state.save_soon()
+    del mined[:-400]
+
+
+def _audience_lines():
+    """The planner's view of audience demand: every request with its
+    ask-count. Two-plus asks is a strong candidate; one is a hint."""
+    reqs = state.STATE.get("audience_requests", [])
+    return [f'- {r.get("topic", "?")} ({r.get("count", 0)} ask'
+            f'{"s" if r.get("count", 0) != 1 else ""})'
+            for r in reqs if r.get("count")][:8]
+
+
+# ---------------------------------------------------------------------------
 # underperformer title optimization
 # ---------------------------------------------------------------------------
 
@@ -1026,7 +1199,9 @@ def title_check():
     invisible either way, so the swap is near-zero-stakes: apply it,
     then report loudly with the old title included (one Studio edit to
     undo). One swap per video, ever — the ledger prevents daily
-    flip-flopping."""
+    flip-flopping. The ledger also records the pre-swap CTR/views, and
+    _swap_verdicts (below) comes back a week later to say whether the
+    swap actually worked."""
     if state.STATE["settings"].get("paused"):
         return
     try:
@@ -1035,6 +1210,12 @@ def title_check():
         return
     if len(videos) < 4:
         return
+    # one analytics fetch for both the pre-swap snapshot and the verdict
+    # pass — a refused fetch just means no CTR context, never a skip
+    try:
+        report, _reason = yt_analytics.video_report(days=35)
+    except Exception:
+        report = {}
     views = sorted(v["views"] for v in videos)
     median = views[len(views) // 2]
     cutoff = (datetime.now() + config.BD_OFFSET
@@ -1061,8 +1242,14 @@ def title_check():
         except Exception as e:
             comms.log(f"title swap failed on {v['id']}: {str(e)[:60]}")
             continue
+        a = report.get(v["id"]) or {}
         swaps[v["id"]] = {"from": v["title"], "to": alt,
-                          "when": datetime.now().strftime("%Y-%m-%d")}
+                          "when": datetime.now().strftime("%Y-%m-%d"),
+                          # the A/B baseline: what the old title had
+                          "pre_ctr": (round(a["ctr"], 4)
+                                      if "ctr" in a else None),
+                          "pre_views": v["views"],
+                          "verdict": None}
         state.save_soon()
         comms.send(
             f"✏️ <b>Title auto-swapped</b> (underperformer)\n"
@@ -1071,6 +1258,55 @@ def title_check():
             f"{v['views']} views after 48h+ — the new title gets a fresh "
             f"shot at impressions. Undo: YouTube Studio → title.",
             html=True)
+    _swap_verdicts(report)
+
+
+def _swap_verdicts(report):
+    """A/B-lite for title swaps: a week after a swap, compare CTR (when
+    the channel has impressions data) and views, and tell the owner
+    whether it worked. Once per swap ever — the verdict marks the
+    ledger entry. Views alone can't prove the title caused anything
+    (time passes, impressions decay), so without CTR the verdict says
+    so instead of pretending."""
+    today = datetime.now() + config.BD_OFFSET
+    swaps = state.STATE.get("title_swaps", {})
+    for vid, sw in swaps.items():
+        if sw.get("verdict") is not None:
+            continue
+        try:
+            when = datetime.strptime(sw.get("when") or "", "%Y-%m-%d")
+        except ValueError:
+            continue
+        if (today - when).days < 7:
+            continue
+        a = report.get(vid) or {}
+        post_ctr = a.get("ctr")
+        post_views = a.get("views")
+        pre_ctr = sw.get("pre_ctr")
+        pre_views = sw.get("pre_views", 0)
+        parts, verdict = [], None
+        if pre_ctr is not None and post_ctr is not None:
+            parts.append(f"CTR {pre_ctr * 100:.1f}% → "
+                         f"{post_ctr * 100:.1f}%")
+            gain = (post_ctr - pre_ctr) / pre_ctr if pre_ctr else 0
+            verdict = ("worked — keep it" if gain >= 0.15
+                       else "no clear CTR gain — consider reverting")
+        if post_views is not None:
+            parts.append(f"views {pre_views} → {post_views}")
+        if not parts:
+            sw["verdict"] = "no data"
+            state.save_soon()
+            comms.log(f"swap verdict skipped (no analytics) for {vid}")
+            continue
+        if verdict is None:
+            verdict = (f"inconclusive — no CTR data; views moved "
+                       f"{pre_views} → {post_views}")
+        sw["verdict"] = verdict
+        state.save_soon()
+        comms.send(f"✏️ <b>Title swap verdict</b> — "
+                   f"{comms.esc(sw.get('to', '')[:60])}\n"
+                   f"{' · '.join(parts)}\n{comms.esc(verdict)}",
+                   html=True)
 
 
 def apply_title(uid):

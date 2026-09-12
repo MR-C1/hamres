@@ -961,6 +961,7 @@ body[data-role="visitor"] .field input{pointer-events:none;background:var(--wash
       <button class="btn btn-sm" data-local="revertdir" id="dir-revert" hidden>Discard my edits</button>
     </div>
     <div class="help" id="dirhelp">Every new script is written against this text. Re-planning rewrites it.</div>
+    <div class="help" id="audline" hidden style="margin-top:6px"></div>
   </div>
 
   <div class="sec"><h2>Used topics</h2><span class="note">Already filmed; kept off future scripts. Remove one to allow it again.</span></div>
@@ -1720,6 +1721,16 @@ function render(){
   if (!DIRTY.direction && document.activeElement !== dir) dir.value = d.direction || "";
   dir.placeholder = "No growth analysis yet. It starts writing itself after about three public films — or say what you want covered and the agent follows it.";
   syncDirty();
+  /* audience demand: what commenters explicitly asked for — the planner
+     sees the same list, this is the owner's eye on it */
+  const aud = $("audline");
+  if (aud) {
+    const wants = (d.audience || []).filter(w => / \(\d+\)$/.test(w) && parseInt(w.match(/ \((\d+)\)$/)[1], 10) >= 2);
+    aud.hidden = !wants.length;
+    aud.innerHTML = wants.length
+      ? "💬 Viewers asked for: " + esc(wants.join(", "))
+      : "";
+  }
   $("topics").innerHTML = d.used_topics.length
     ? d.used_topics.map(t => '<span class="chip">'+esc(t)+
         '<button class="x" data-act="forget:'+esc(t)+'" title="Allow this topic again" aria-label="Allow '+esc(t)+' again">×</button></span>').join("")
@@ -2758,6 +2769,10 @@ def api_state():
                   "has_script": bool(j.get("script"))}
                  for j in jobs_list],
         "direction": state.STATE.get("topic_direction", ""),
+        # audience-demand mining: what viewers asked for in comments
+        "audience": [f"{r.get('topic', '?')} ({r.get('count', 0)})"
+                     for r in state.STATE.get("audience_requests", [])
+                     if r.get("count")][:6],
         "used_topics": state.STATE.get("used_topics", [])[-25:],
         "best_hour": state.STATE.get("best_hour", 17),
         # scene-aware retention: one compact finding per mapped film

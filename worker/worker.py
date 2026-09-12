@@ -293,7 +293,7 @@ def _upload_files(script, sid):
         used.add(t)
         files[i] = (name, t)
 
-    urls, errors, titles, format_urls = [], [], [], {}
+    urls, errors, titles, format_urls = [], [], {}, {}
     # the duplicate-guard tells SHORT and LONG apart by duration bucket
     for name, title in files:
         f = REVIEW / name

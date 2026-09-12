@@ -40,8 +40,12 @@ sources.
    **PRIVATE** immediately (a dying runner can never lose a finished
    video), then the Telegram preview arrives with ✅ Publish / ❌
    Discard buttons. No time limit on the decision. A ✅ schedules the
-   video public at the channel's best hour (17:00 until the data says
-   otherwise) — YouTube's own `publishAt` does the flip.
+   video public at the channel's best hour — YouTube's own `publishAt`
+   does the flip. The best hour is learned, not guessed: daily per-video
+   view snapshots feed a median-early-velocity comparison per publish
+   hour (BD clock), an hour needs 3+ videos to qualify, and it must beat
+   the current hour by 20% before the channel moves — the move is
+   announced because every future ✅ silently changes hour with it.
 6. **Learn** — per-video retention (longs vs shorts split) feeds the
    next planner. Scene-aware retention goes deeper: the renderer stores
    each long-form's scene timings, the daily scene-watch fetches
@@ -52,6 +56,14 @@ sources.
    without re-rendering. Findings ride the strategist prompt as
    concrete evidence (drop-off scenes vs hold scenes, and their average
    lengths), and land in Telegram + the panel's Scene watch table.
+7. **Listen** — the comments are free topic research. Every new comment
+   passes a tiny LLM check for "please cover X" requests; repeated asks
+   merge into a demand list (topic + ask count + askers) the planner
+   sees every run, and the second ask for the same topic tells the
+   owner. Title swaps get A/B verdicts: the ledger records pre-swap
+   CTR/views, and a week later the comparison comes back — "worked,
+   keep it" at +15% CTR, "consider reverting" otherwise, honestly
+   "inconclusive" when the channel has no impressions data yet.
 
 ## Architecture
 
@@ -158,7 +170,7 @@ state.py          gist-backed state with deploy-overlap merge rules
 comms.py          Telegram console (reports, buttons, alerts)
 cloud.py          repository_dispatch — instant render-worker wakeups
 worker/           the render farm half (runs on GitHub Actions)
-selftest_*.py     9 offline test suites — no keys, no network
+selftest_*.py     10 offline test suites — no keys, no network
 ```
 
 ## Deploy the brain (Render)
@@ -221,6 +233,7 @@ python selftest_analytics.py  # the analytics loop, faked end to end
 python selftest_script.py     # script writing + big-model routing
 python selftest_quality.py    # the 3 script gates + best-hour + title swaps
 python selftest_scenes.py     # scene-aware retention, end to end offline
+python selftest_loops.py      # demand mining + best-hour learner + swap verdicts
 python selftest_llm.py        # provider chain + keyless search parsers
 ```
 

@@ -20,11 +20,15 @@ STATE shape:
   "worker": {"last_seen": iso, "last_job": str, "warned_offline": bool},
   "best_hour": 17,
   "retention_scores": [...],   # QA gate ledger, same shape as hook_scores
-  "title_swaps": { video_id: {"from", "to", "when"} },  # one per video, ever
+  "title_swaps": { video_id: {"from", "to", "when", "pre_ctr",
+                              "pre_views", "verdict"} },  # one per video
   "scene_timelines": { video_id: {title, scenes:[{id,label,start,end}],
                                    source, when} },  # render + chapter backfill
   "scene_retention": { video_id: {title, scenes:[{...,drop,peak,signal}],
-                                   views, when} }    # curve-mapped snapshots
+                                   views, when} },    # curve-mapped snapshots
+  "audience_requests": [ {topic, key, count, askers, last} ],  # comment mining
+  "mined_comments": [...],     # comment ids already through the miner
+  "video_history": { video_id: [[date, views], ...] }  # daily views snapshots
 }
 """
 
@@ -403,3 +407,6 @@ def default_state():
     STATE.setdefault("title_swaps", {})
     STATE.setdefault("scene_timelines", {})
     STATE.setdefault("scene_retention", {})
+    STATE.setdefault("audience_requests", [])
+    STATE.setdefault("mined_comments", [])
+    STATE.setdefault("video_history", {})

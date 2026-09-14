@@ -52,7 +52,7 @@ jobs:
           cat > worker/config.yaml <<EOF
           channel:
             name: "FOOTNOTE"
-            hashtags: "#mystery #facts"
+            hashtags: "#psychology #mindtricks #didyouknow"
           keys:
             pexels: "${PEXELS_API_KEY}"
           voice:

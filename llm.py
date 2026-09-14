@@ -200,12 +200,12 @@ def ddg_search(query, n=8):
     raise RuntimeError(f"duckduckgo search failed: {last}")
 
 
-_QUERY_INSTR = ("You are choosing a web-search query for a documentary "
-                "channel. From the brief below, output ONLY the search "
-                "query itself — 5 to 10 words, no quotes, no explanation, "
-                "nothing else. Target a fresh topic in the brief's "
-                "direction that is NOT among its already-used topics:"
-                "\n\n")
+_QUERY_INSTR = ("You are choosing a web-search query for a psychology / "
+                "mind-tricks channel. From the brief below, output ONLY "
+                "the search query itself — 5 to 10 words, no quotes, no "
+                "explanation, nothing else. Target a fresh topic in the "
+                "brief's direction that is NOT among its already-used "
+                "topics:\n\n")
 
 
 def wiki_search(query, n=5):

@@ -15,13 +15,41 @@ import state
 import yt
 import yt_analytics
 
+# The channel's topic seed — the fallback direction whenever no learned
+# guidance exists yet. PIVOT 2026-09-14: the owner moved FOOTNOTE off
+# history/mystery facts (22 videos, 2 subs — the niche wasn't catching)
+# onto mind tricks. This string is the single source of that seed.
+MIND_TRICKS_SEED = ("mind tricks — dark psychology, persuasion tactics, "
+                    "brain glitches, attention hijacking. Every video is "
+                    "about the VIEWER: they should finish it feeling seen, "
+                    "tricked, or smarter about their own head. Fun and "
+                    "eye-catching, never a lecture.")
+
 SYSTEM = ("You are the growth manager of FOOTNOTE — a faceless YouTube "
-          "facts/mystery channel. The brand idea: every video is the "
-          "footnote everyone skipped — the tiny detail that changes the "
-          "whole story. Voice: literate, precise, quietly unsettling. "
-          "Titles hint at the impossible but never lie. Every fact must "
-          "be true and verifiable. Never suggest fake growth tactics "
-          "(sub4sub, spam, bought views) — they get channels terminated.")
+          "channel about mind tricks: dark psychology, persuasion "
+          "tactics, brain glitches, the hidden mechanics of attention. "
+          "The brand idea: every video is the footnote everyone skipped "
+          "— the tiny detail that changes how you see your own mind. "
+          "The target viewer must feel the video is ABOUT THEM. Voice: "
+          "punchy, playful, a little unsettling in a fun way, never "
+          "academic. Titles create an itch the viewer can't not scratch "
+          "— but never lie. Every fact must be true, verifiable, and "
+          "replication-aware: no busted myths (10% of the brain, "
+          "learning styles, left/right-brained). Never suggest fake "
+          "growth tactics (sub4sub, spam, bought views) — they get "
+          "channels terminated.")
+
+# Shown to the strategist until the catalogue is mostly new-niche
+# (roughly 10 mind-tricks videos, ~mid-Oct 2026 — then delete this).
+# Without it, the back catalogue's history topics look like the
+# channel's proven winners and the planner pulls the niche back.
+PIVOT_NOTE = ("CHANNEL PIVOT (owner decision, 2026-09-14): this channel "
+              "now makes MIND TRICKS videos — dark psychology, "
+              "persuasion, brain glitches — not history/mystery. The "
+              "existing back catalogue is OLD-direction evidence: do not "
+              "use its topics to pull the direction back toward history, "
+              "archives, or mysteries. Its FORMAT lessons (video length, "
+              "pacing) may still carry over.")
 
 
 def gemini(prompt, system=SYSTEM, gemini_models=None):
@@ -43,15 +71,15 @@ def gemini(prompt, system=SYSTEM, gemini_models=None):
 # comments, summaries).
 SCRIPT_GEMINI_MODELS = ["gemini-flash-latest"]
 
-SCRIPT_PROMPT = """Write ONE video script for a faceless YouTube facts/mystery channel, as strict JSON only (no markdown, no commentary):
+SCRIPT_PROMPT = """Write ONE video script for a faceless YouTube mind-tricks channel (dark psychology, persuasion tactics, brain glitches), as strict JSON only (no markdown, no commentary):
 
 {{
   "id": "kebab-case-topic-slug",
   "format": ["short", "long"],
   "title": "Curiosity-gap title under 70 chars",
   "title_alternatives": ["exactly 2 alternative curiosity-gap titles"],
-  "description": "Full YouTube description: 120-200 words. First 1-2 lines = a hook that sells the click (this text shows in search results). Then 2-3 short paragraphs of context that tease the mystery WITHOUT spoiling the answer. End with an engaging question, then a line of 4-6 hashtags relevant to THIS topic (like #unsolvedmystery #truehistory #didyouknow).",
-  "tags": ["8-14 specific tags: mix broad (facts, mystery) and topic-specific] ,
+  "description": "Full YouTube description: 120-200 words. First 1-2 lines = a hook that sells the click (this text shows in search results). Then 2-3 short paragraphs of context that tease the trick WITHOUT spoiling the mechanism. End with an engaging question, then a line of 4-6 hashtags relevant to THIS topic (like #psychology #mindtricks #didyouknow).",
+  "tags": ["8-14 specific tags: mix broad (psychology, mind tricks, human behavior) and topic-specific] ,
   "hook": "80-120 words. A cinematic COLD-OPEN vignette: drop the viewer INTO the single most striking moment of the story (a date, a place, a person mid-crisis). No greeting, no channel intro, no context. End on the framing question the whole video answers.",
   "scenes": [
     {{"narration": "90-140 words, conversational, fast, surprising.",
@@ -94,40 +122,41 @@ STRUCTURE (this is a mini-documentary, not a list of facts):
   becomes BOTH part of the main Short and, if unused there, its own
   standalone Short (that's what short_title is for). All facts true,
   verifiable, and specific (dates, numbers, names).
-- ARCHIVAL (this is a DOCUMENTARY — real material MUST dominate):
-  every scene names 2-4 real searchable subjects in "archive_search" —
-  exact names of the people, places, objects, documents, maps or
-  newspaper pages the narration mentions, phrased as Wikimedia Commons
-  searches ("Isdal Woman belongings", "Somerton Man rubaiyat", "Utah
-  1947 newspaper", "Bob Lazar", "Dyatlov Pass tent", "Tennessee 1817
-  map"). Give EVERY scene multiple distinct search angles so most scenes
-  land at least one real image. Stock footage is the LAST resort for
-  purely abstract connective moments only. Never invent an archive
-  subject that would not exist.
+- ARCHIVAL (real material dominates WHEN IT EXISTS): when a scene names
+  a real experiment, researcher, study, or artifact, its "archive_search"
+  gives 2-4 exact Wikimedia Commons searches for that real thing
+  ("Asch conformity experiment", "Stanford prison experiment", "Phineas
+  Gage skull", "Ebbinghaus forgetting curve", "Milgram shock box").
+  Many psychology scenes are conceptual (a trick working on you) — no
+  real photo exists, so keep their archive_search empty or minimal and
+  carry those scenes with strong visual_keywords instead. Never invent
+  an archive subject that would not exist.
 - SOURCES: at least half the scenes carry a "source" field — a SHORT real
-  citation for that scene's central fact, like "FBI file 49-49395, 1947",
-  "Nature, vol 576, 2019", "Strasbourg city archives". Never fabricate a
-  citation: if unsure of the exact document, cite the institution and year
-  ("Met Office records, 1952"). These appear on screen — they are the
-  channel's credibility device. A scene without a source is fine; a fake
-  source is not.
+  citation for that scene's central fact, like "Asch, 1951, Psychological
+  Monographs", "Kahneman & Tversky, 1974, Science", "Simons & Chabris,
+  1999, Perception". Never fabricate a citation: if unsure of the exact
+  paper, cite the researcher and year ("Milgram, 1963"). These appear on
+  screen — they are the channel's credibility device. A scene without a
+  source is fine; a fake source is not.
 
 CRITICAL — visual_keywords decide the stock footage shown during each scene. They are searched on stock-video sites (Pexels), so they must be phrased as searches that RETURN RESULTS there:
 - Describe what the narration literally mentions, in filmable terms: a person,
   object, place, or action a camera can point at. NEVER abstract words
   ("mystery", "history", "time", "facts", "story", "secret").
 - Use "concrete subject + common visual" phrasing that stock libraries stock:
-  "mans leather shoes closeup", "beach night waves", "old suitcase dark room",
-  "vintage newspaper printing press". NOT hyper-specific proper nouns that
-  return zero results ("Strasbourg 1518 street") — drop the proper noun,
-  keep the visual ("medieval cobblestone street").
+  "crowd walking city street", "close up human eye", "slot machine
+  spinning casino", "phone screen scrolling dark room", "handshake
+  business meeting closeup". NOT hyper-specific proper nouns that
+  return zero results ("Asch 1951 laboratory") — drop the proper noun,
+  keep the visual ("psychology experiment cards").
 - VARIETY IS MANDATORY: no keyword may repeat across scenes, and no two
   scenes may share more than one keyword. Each scene's footage must look
   different from the previous scene's. Aim for wide variety: people, objects,
   places, closeups, wide shots, day, night.
-- If a concept is abstract, film its concrete consequence: for "hysteria
-  spreading" use "panicked crowd running"; for "no explanation" use
-  "empty foggy road night".
+- If a concept is abstract, film its concrete consequence: for
+  "attention hijacked" use "slot machine spinning closeup"; for "trust
+  being built" use "handshake business meeting"; for "memory rewritten"
+  use "old photographs scattered table".
 
 Topic guidance from the channel's growth analysis: {direction}
 Avoid these already-used topics: {used}
@@ -135,7 +164,7 @@ Avoid these already-used topics: {used}
 Return ONLY the JSON object."""
 
 
-VIRALITY_PROMPT = """Score this video hook (the opening narration of a YouTube facts/mystery video) from 0-100 for its ability to stop a scroll and hold attention through the first 30 seconds.
+VIRALITY_PROMPT = """Score this video hook (the opening narration of a YouTube mind-tricks video) from 0-100 for its ability to stop a scroll and hold attention through the first 30 seconds.
 
 Signals, in descending weight:
 1. First sentence is a specific, arresting claim or image (dates, numbers, names) — not a general setup
@@ -212,16 +241,16 @@ def _score_retention(script):
         return 75, "unscorable"
 
 
-RESEARCH_PROMPT = """You are researching a topic for a documentary YouTube channel. Channel direction: {direction}
+RESEARCH_PROMPT = """You are researching a topic for a mind-tricks YouTube channel (dark psychology, persuasion tactics, brain glitches). Channel direction: {direction}
 
 Topics already used (pick something DIFFERENT): {used}
 
-Pick ONE topic in this direction and RESEARCH IT using web search. Return strict JSON only:
+Pick ONE topic in this direction and RESEARCH IT using web search. Prefer effects with NAMED studies, experiments, or researchers behind them — and note in a source if an effect failed replication. Return strict JSON only:
 {{
   "topic": "the chosen subject",
-  "angle": "the fresh 'footnote' angle — the overlooked detail that changes the story (1-2 sentences)",
+  "angle": "the fresh 'footnote' angle — the overlooked detail or the trick's mechanism that changes how the viewer sees themselves (1-2 sentences)",
   "sources": [{{"fact": "one specific verified fact", "citation": "source name + URL"}} ... 5 to 8 entries, from REAL search results],
-  "archive_terms": ["3-5 Wikimedia Commons search terms for real photos of the actual people/places/evidence"],
+  "archive_terms": ["3-5 Wikimedia Commons search terms for real photos of the actual experiments, researchers, or evidence"],
   "saturation_note": "one sentence: how covered is this topic already by big channels?"
 }}"""
 
@@ -248,7 +277,7 @@ def _research(direction, used):
     return None
 
 
-FACTCHECK_PROMPT = """You are a fact-checker for a documentary YouTube channel. Below are a script's scene narrations (each with its claimed source) and the RESEARCH SOURCES gathered for this topic before writing.
+FACTCHECK_PROMPT = """You are a fact-checker for a psychology YouTube channel. Below are a script's scene narrations (each with its claimed source) and the RESEARCH SOURCES gathered for this topic before writing.
 
 Scene narrations:
 {scenes}
@@ -259,11 +288,13 @@ Research sources:
 Check each scene's central claims. Flag ONLY real problems:
 - a fact that CONTRADICTS the research sources
 - a specific claim (date, number, name) the sources don't support AND that sounds wrong or invented
-- a citation that looks fabricated (not from the sources, not a plausible institution + year)
+- a citation that looks fabricated (not from the sources, not a plausible researcher + year)
+- a famous psychology myth presented as fact (10% of the brain, learning styles, left/right-brained, subliminal advertising works) — UNLESS the script itself is debunking it
+- an effect presented as solid when the sources say it failed replication
 
 Do NOT flag style, wording, claims too general to check, or harmless paraphrases.
 
-Respond with strict JSON only: {{"ok": true, "problems": []}} — or ok false with up to 4 problems, each under 25 words, like "Scene 4: sources say the ledger surfaced in 1935, not 1932"."""
+Respond with strict JSON only: {{"ok": true, "problems": []}} — or ok false with up to 4 problems, each under 25 words, like "Scene 4: the sources say 75% conformed at least once, not 75% every round"."""
 
 
 def _fact_check(script, research):
@@ -330,8 +361,7 @@ def generate_script(direction=None):
                   f"channel's style and format lessons still apply: "
                   f"{guidance})")
     else:
-        d = guidance or ("unsolved mysteries, strange science, history "
-                         "they never taught you")
+        d = guidance or MIND_TRICKS_SEED
     used = ", ".join(state.STATE.get("used_topics", [])[-40:]) or "none yet"
     research = _research(d, used)
     feedback = None          # last attempt's problems, fed to the next draft
@@ -437,8 +467,8 @@ def _parse_script(text):
 
 
 def _write_script(direction=None, research=None, feedback=None):
-    direction = direction or state.STATE.get("topic_direction") or (
-        "unsolved mysteries, strange science, history they never taught you")
+    direction = (direction or state.STATE.get("topic_direction")
+                 or MIND_TRICKS_SEED)
     used = ", ".join(state.STATE.get("used_topics", [])[-40:]) or "none yet"
     prompt = SCRIPT_PROMPT.format(direction=direction, used=used)
     if feedback:
@@ -663,9 +693,7 @@ def analyze_and_plan():
         return
     if len(videos) < 3:
         state.STATE["topic_direction"] = (
-            "Channel is new — focus on high-curiosity evergreen topics: "
-            "unsolved mysteries, space anomalies, human body oddities, "
-            "history they never taught you.")
+            "Channel is new — " + MIND_TRICKS_SEED)
         state.save_soon()
         queue_next_video(1)
         return
@@ -683,7 +711,10 @@ def analyze_and_plan():
     backfill_timelines(videos)   # idempotent — in case the report missed
     scene_lessons = _scene_lesson_lines()
     audience = _audience_lines()
-    guidance = gemini(f"""Channel stats for our facts/mystery channel:
+    guidance = gemini(f"""Channel stats for our mind-tricks channel
+(dark psychology, persuasion tactics, brain glitches):
+
+{PIVOT_NOTE}
 
 {summary}
 
@@ -1123,7 +1154,7 @@ def post_reply(uid):
 # audience-demand mining — the comments are free topic research
 # ---------------------------------------------------------------------------
 
-MINE_PROMPT = """A viewer comment on a documentary YouTube channel (unsolved mysteries, strange science, hidden history).
+MINE_PROMPT = """A viewer comment on a mind-tricks YouTube channel (dark psychology, persuasion tactics, brain glitches).
 
 Comment: "{text}"
 

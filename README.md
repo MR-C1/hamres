@@ -5,9 +5,12 @@
 A **zero-cost, fully automated faceless YouTube channel**: research →
 script → render → upload → learn, with the owner's ✅ as the only
 publishing gate. One person owns it; no step needs a credit card. The
-channel makes mystery/history mini-documentaries — Shorts for growth,
-long-form for revenue — and every script is written from real, cited
-sources.
+channel makes **mind-tricks mini-documentaries** — dark psychology,
+persuasion tactics, brain glitches; Shorts for growth, long-form for
+revenue — and every script is written from real, cited sources
+(replication-aware: busted psych myths get flagged, not filmed).
+*(Pivoted from history/mystery facts on 2026-09-14 — 22 videos, 2 subs;
+the niche wasn't catching.)*
 
 ## How a video gets made
 

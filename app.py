@@ -3380,7 +3380,10 @@ def _publish_now(approval_id, note=""):
 def _cross_post(approval_id, p):
     """Mirror the Short to Instagram (as a live Reel) and TikTok (as a
     draft) right after the owner's ✅ — the same approval publishes
-    everywhere. Never raises, never blocks the YouTube schedule; every
+    everywhere. PARKED (owner decision, Sept 2026): while neither
+    platform's tokens are set, this stays completely quiet — a ✅ must
+    not nag about features that are switched off. Never raises, never
+    blocks the YouTube schedule; when a platform IS configured, every
     outcome lands in Telegram so a silent failure is impossible."""
     def report(emoji, platform, ok, detail):
         comms.send(
@@ -3389,29 +3392,25 @@ def _cross_post(approval_id, p):
                if ok else f"skipped: {comms.esc(str(detail)[:180])}"),
             html=True)
 
+    import ig
+    import tiktok
+    if not (ig.configured() or tiktok.configured()):
+        return   # parked — nothing staged, nothing said
     asset = (p.get("asset_urls") or {}).get("short")
     caption = (p.get("description") or p.get("title") or "")[:2200]
     if asset:
-        try:
-            import ig
-            if ig.configured():
+        if ig.configured():
+            try:
                 ok, detail = ig.publish_reel(asset, caption)
-                report("📸", "Instagram", ok, detail)
-            else:
-                report("📸", "Instagram", False,
-                       "not configured (IG_USER_ID / IG_ACCESS_TOKEN)")
-        except Exception as e:
-            report("📸", "Instagram", False, e)
-        try:
-            import tiktok
-            if tiktok.configured():
+            except Exception as e:
+                ok, detail = False, e
+            report("📸", "Instagram", ok, detail)
+        if tiktok.configured():
+            try:
                 ok, detail = tiktok.inbox_post(asset)
-                report("🎵", "TikTok", ok, detail)
-            else:
-                report("🎵", "TikTok", False,
-                       "not configured (TIKTOK_* env vars)")
-        except Exception as e:
-            report("🎵", "TikTok", False, e)
+            except Exception as e:
+                ok, detail = False, e
+            report("🎵", "TikTok", ok, detail)
     else:
         report("📸", "Cross-post", False,
                "no staged Short URL (render predates cross-posting, or "

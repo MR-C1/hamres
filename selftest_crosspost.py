@@ -381,7 +381,8 @@ def main():
     check("publish: TikTok draft cross-posted",
           any("TikTok" in m and "draft" in m.lower() for m in sent))
 
-    # not-configured platforms are reported, not swallowed
+    # parked: while NO platform is configured the ✅ says nothing
+    # about cross-posting (owner parked it — no nagging)
     fake_ig.configured = lambda: False
     fake_tk.configured = lambda: False
     st.STATE["pending_videos"]["jy"] = {
@@ -390,11 +391,13 @@ def main():
         {"short": "https://dl/s2.mp4"}, "description": "c2"}
     sent.clear()
     app._publish_now("jy")
-    check("publish: unconfigured platforms say so in Telegram",
-          any("Instagram" in m and "not configured" in m for m in sent)
-          and any("TikTok" in m and "not configured" in m for m in sent))
+    check("publish: parked (nothing configured) stays completely silent",
+          not any("Instagram" in m or "TikTok" in m
+                  or "Cross-post" in m for m in sent))
 
-    # a pending entry with NO staged asset (old render / PC worker)
+    # a pending entry with NO staged asset (old render / PC worker) —
+    # explained only when cross-posting is actually enabled
+    fake_ig.configured = lambda: True
     st.STATE["pending_videos"]["jz"] = {
         "title": "T3", "video_url": "https://youtu.be/dd",
         "video_urls": ["https://youtu.be/dd"], "asset_urls": {},

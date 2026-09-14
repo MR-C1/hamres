@@ -122,7 +122,8 @@ def update_branding(description=None, keywords=None):
             ch["keywords"] = keywords
         yt.channels().update(
             part="brandingSettings",
-            body={"brandingSettings": {"channel": ch}}).execute()
+            body={"id": items[0]["id"],        # API demands it even for mine
+                  "brandingSettings": {"channel": ch}}).execute()
         return True
     return _with_retries(once)
 

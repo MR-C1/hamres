@@ -440,7 +440,7 @@ def diagnose():
     for name, fn in (("duckduckgo", ddg_search),
                      ("wikipedia", wiki_search)):
         try:
-            hits = fn("unexplained historical mystery", n=3)
+            hits = fn("famous psychology conformity experiment", n=3)
             lines.append(f"✅ {name} search — {len(hits)} results "
                          f"(keyless research fallback)")
         except Exception as e:

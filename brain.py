@@ -87,10 +87,10 @@ SCRIPT_PROMPT = """Write ONE video script for a faceless YouTube mind-tricks cha
   "title_alternatives": ["exactly 2 alternative curiosity-gap titles"],
   "description": "Full YouTube description: 120-200 words. First 1-2 lines = a hook that sells the click (this text shows in search results). Then 2-3 short paragraphs of context that tease the trick WITHOUT spoiling the mechanism. End with an engaging question, then a line of 4-6 hashtags relevant to THIS topic (like #psychology #mindtricks #didyouknow).",
   "tags": ["8-14 specific tags: mix broad (psychology, mind tricks, human behavior) and topic-specific] ,
-  "hook": "80-120 words. A cinematic COLD-OPEN vignette: drop the viewer INTO the single most striking moment of the story (a date, a place, a person mid-crisis). No greeting, no channel intro, no context. End on the framing question the whole video answers.",
+  "hook": "80-120 words. COLD-OPEN by putting the trick ON the viewer: make them count something, choose between options, watch a demonstration unfold on someone — they must PARTICIPATE before they understand. (If the topic truly can't involve the viewer, drop them into the single most striking moment instead.) No greeting, no channel intro, no context. End on the framing question the whole video answers.",
   "scenes": [
     {{"narration": "90-140 words, conversational, fast, surprising.",
-      "short_narration": "ONLY on in_short scenes: 40-60 words — the scene's punchiest core, rewritten tight for the Short",
+      "short_narration": "ONLY on in_short scenes: 40-60 words — the scene's punchiest core, rewritten tight for the Short. End on a line that rewards a rewatch (the trick lands harder the second time)",
       "short_title": "ONLY on in_short scenes: a standalone Short title for just this scene — under 60 chars, curiosity gap, works with zero context",
       "archive_search": ["2-4 real-world archival photo searches"],
       "visual_keywords": ["2-3 stock-footage search phrases (fallback)"],
@@ -125,6 +125,25 @@ STRUCTURE (this is a mini-documentary, not a list of facts):
   * No literary filler: no throat-clearing, no mood-setting without
     facts, no adjective chains. Every sentence advances the story or
     opens a question — ideally both.
+- MIND-TRICKS MECHANICS (what makes THIS niche work):
+  * Second person, present tense. "You" language throughout — the
+    viewer is the subject of the video, not a spectator of someone
+    else's story.
+  * Make the viewer DO something in the first 30 seconds: count the
+    passes, remember this word, pick a card, watch the left hand. The
+    classic attention experiments translate perfectly to video — use
+    them as openers, not just as citations.
+  * REVEAL-THEN-REPLAY: let the trick or glitch HAPPEN before any
+    explanation, then dissect it. The viewer should want to rewatch
+    the opening with new eyes — design for that rewatch.
+  * End every video with the viewer able to SPOT the trick in the
+    wild: a concrete "next time someone does X on you, you'll see it
+    coming" moment. Practical payoff = shares and saves.
+  * DEFENSIVE FRAMING, always: videos REVEAL what is done TO people
+    and how to see through it — never a how-to for doing it to
+    others. This is both the channel's ethical line and its
+    policy-safe position (manipulation tutorials get channels
+    demonetized; reveals get them shared).
 - Mark the 4 most visual scenes "in_short": true. Each in_short scene
   becomes BOTH part of the main Short and, if unused there, its own
   standalone Short (that's what short_title is for). All facts true,
@@ -414,7 +433,7 @@ Hook (opening narration): "{hook}"
 
 A thumbnail is NOT the title repeated — it is one image plus a few words that make a scrolling stranger NEED to know. Draft 3 DIFFERENT concepts. Each:
 - "text": 2-4 WORDS, all-caps, punchy — opens a curiosity gap TOGETHER WITH the title (never repeats the title, never a sentence)
-- "concept": one line describing the picture — a concrete object/moment from the story, filmable, high contrast
+- "concept": one line describing the picture — for this channel (mind tricks), a HUMAN ELEMENT wins: a face mid-reaction, a pair of eyes, hands mid-trick, someone choosing between options. One focal point, high contrast, filmable, readable at phone size
 - "score": 0-100, on curiosity gap with the title, readability at small size, and image concreteness
 
 Respond with strict JSON only: {{"concepts": [{{"text": "...", "concept": "...", "score": 0}}, exactly 3]}}"""

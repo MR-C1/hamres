@@ -39,6 +39,13 @@ SYSTEM = ("You are the growth manager of FOOTNOTE — a faceless YouTube "
           "growth tactics (sub4sub, spam, bought views) — they get "
           "channels terminated.")
 
+# Videos published before this date are the old (history/mystery)
+# direction — legacy content. Permanent marker, unlike PIVOT_NOTE
+# above: the title-swap loop skips them forever; re-titling old-niche
+# videos can't help them and the optimization budget belongs to
+# new-niche videos.
+PIVOT_DATE = "2026-09-14"
+
 # Shown to the strategist until the catalogue is mostly new-niche
 # (roughly 10 mind-tricks videos, ~mid-Oct 2026 — then delete this).
 # Without it, the back catalogue's history topics look like the
@@ -1255,6 +1262,8 @@ def title_check():
     for v in videos:
         if v["id"] in swaps:
             continue
+        if v["published"] < PIVOT_DATE:
+            continue   # pre-pivot back catalogue — legacy, leave it be
         if not (v["published"] <= cutoff and v["views"] < median * 0.5
                 and v["views"] < 100):
             continue

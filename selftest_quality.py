@@ -24,7 +24,7 @@ gate loop end to end:
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -237,17 +237,23 @@ def main():
     sent = []
     brain.comms.send = lambda msg, html=False: sent.append(msg)
     swapped = []
+    # dates are relative to the real clock so the 48h rule holds; the
+    # pivot floor is dropped for THIS mechanics check (it gets its own
+    # check below with the real date)
+    old = (datetime.now() + brain.config.BD_OFFSET
+           - timedelta(days=5)).strftime("%Y-%m-%d")
+    brain.PIVOT_DATE = "2000-01-01"
     brain.yt.my_videos = lambda **k: [
         {"id": "ok1", "title": "A", "views": 300, "privacy": "public",
-         "published": "2026-09-10"},
+         "published": old},
         {"id": "ok2", "title": "B", "views": 200, "privacy": "public",
-         "published": "2026-09-10"},
+         "published": old},
         {"id": "ok3", "title": "C", "views": 150, "privacy": "public",
-         "published": "2026-09-10"},
+         "published": old},
         {"id": "ok4", "title": "D", "views": 120, "privacy": "public",
-         "published": "2026-09-10"},
+         "published": old},
         {"id": "weak1", "title": "Old Weak Title", "views": 20,
-         "privacy": "public", "published": "2026-09-01"}]
+         "privacy": "public", "published": old}]
     brain.yt.update_title = lambda vid, title: swapped.append((vid, title))
     box = rig(brain, ["\"A Far Better Title\""])
     brain.title_check()
@@ -264,6 +270,21 @@ def main():
     check("second pass: ledger blocks a re-swap",
           swapped == [("weak1", "A Far Better Title")]
           and box2["n"] == 0 and not sent, True)
+
+    # pivot floor: videos from before the niche pivot (2026-09-14) are
+    # legacy back catalogue — never re-titled, swap budget goes to
+    # new-niche videos only
+    brain.PIVOT_DATE = "2026-09-14"
+    brain.state.STATE["title_swaps"] = {}
+    swapped.clear()
+    sent.clear()
+    brain.yt.my_videos = lambda **k: [
+        {"id": "legacy1", "title": "A History Video", "views": 5,
+         "privacy": "public", "published": "2026-09-01"}]
+    box3 = rig(brain, ["\"Clickbait Fix\""])
+    brain.title_check()
+    check("pre-pivot (legacy) videos are never re-titled",
+          not swapped and box3["n"] == 0 and not sent, True)
 
     # ---- 9. queue message carries warnings + thumbnail text ----
     brain = fresh()

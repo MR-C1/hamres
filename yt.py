@@ -83,6 +83,50 @@ def channel_stats():
     return _with_retries(once)
 
 
+def channel_branding():
+    """The channel's About text + search keywords (a read). Used by the
+    panel's branding action — niche pivots change these, and they live
+    on YouTube, not in this repo."""
+    def once():
+        yt = get_service()
+        r = yt.channels().list(
+            part="snippet,brandingSettings", mine=True).execute()
+        items = r.get("items", [])
+        if not items:
+            return None
+        c = items[0]
+        br = c.get("brandingSettings", {}).get("channel", {})
+        return {"title": c["snippet"].get("title", ""),
+                "description": c["snippet"].get("description", ""),
+                "keywords": br.get("keywords", "")}
+    return _with_retries(once)
+
+
+def update_branding(description=None, keywords=None):
+    """Write the channel's About text / search keywords. Read-modify-
+    write of the whole brandingSettings.channel object — channels.update
+    replaces the values the body carries, so sending the complete dict
+    back preserves every field we don't touch."""
+    def once():
+        yt = get_service()
+        cur = yt.channels().list(
+            part="brandingSettings", mine=True).execute()
+        items = cur.get("items", [])
+        if not items:
+            return False
+        br = items[0].get("brandingSettings", {})
+        ch = br.setdefault("channel", {})
+        if description is not None:
+            ch["description"] = description
+        if keywords is not None:
+            ch["keywords"] = keywords
+        yt.channels().update(
+            part="brandingSettings",
+            body={"brandingSettings": {"channel": ch}}).execute()
+        return True
+    return _with_retries(once)
+
+
 def _iso_dur(s):
     """ISO-8601 duration (PT4M13S) -> seconds."""
     m = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", s or "")

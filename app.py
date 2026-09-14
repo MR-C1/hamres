@@ -2886,6 +2886,23 @@ def api_action():
                         "error": "read-only sign-in — ask the admin"}), 403
     state.default_state()
     import cloud
+    if a == "branding":
+        # the channel's About text + search keywords — read with no
+        # fields, write with description/keywords. These live on
+        # YouTube (not in this repo), so a niche pivot needs this to
+        # carry the new identity across.
+        try:
+            if not (data.get("description") or data.get("keywords")):
+                cur = yt.channel_branding() or {}
+                return jsonify({"ok": True, "branding": cur})
+            yt.update_branding(description=data.get("description"),
+                               keywords=data.get("keywords"))
+            cur = yt.channel_branding() or {}
+            comms.log("panel: channel branding updated")
+            return jsonify({"ok": True, "branding": cur})
+        except Exception as e:
+            return jsonify({"ok": False,
+                            "error": str(e)[:200]}), 500
     if a == "next":
         comms.log("command: queue a video (panel)")
         comms.send("Writing a script… (from panel)")

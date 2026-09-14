@@ -22,6 +22,12 @@ STATE shape:
   "retention_scores": [...],   # QA gate ledger, same shape as hook_scores
   "title_swaps": { video_id: {"from", "to", "when", "pre_ctr",
                               "pre_views", "verdict"} },  # one per video
+  "series_n": 1,               # next episode number for the title spine
+  "quota_deferred": 0,         # videos deferred by the upload-quota guard
+  "thumb_bank": { video_id: {"text", "concept", "alternates"} },
+  "thumb_swaps": { video_id: {"from", "to", "concept", "when", "pre_ctr",
+                              "pre_views", "verdict", "video_url",
+                              "orig"} },  # thumbnail A/B ledger
   "scene_timelines": { video_id: {title, scenes:[{id,label,start,end}],
                                    source, when} },  # render + chapter backfill
   "scene_retention": { video_id: {title, scenes:[{...,drop,peak,signal}],
@@ -405,6 +411,11 @@ def default_state():
     STATE.setdefault("best_hour", 17)
     STATE.setdefault("retention_scores", [])
     STATE.setdefault("title_swaps", {})
+    STATE.setdefault("series_n", 1)          # the Mind Trick #N spine
+    STATE.setdefault("quota_deferred", 0)    # videos waiting on the reset
+    STATE.setdefault("thumb_bank", {})       # video_id -> {text, concept,
+                                             #   alternates} from queue time
+    STATE.setdefault("thumb_swaps", {})      # video_id -> A/B ledger entry
     STATE.setdefault("scene_timelines", {})
     STATE.setdefault("scene_retention", {})
     STATE.setdefault("audience_requests", [])

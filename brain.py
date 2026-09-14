@@ -83,8 +83,8 @@ SCRIPT_PROMPT = """Write ONE video script for a faceless YouTube mind-tricks cha
 {{
   "id": "kebab-case-topic-slug",
   "format": ["short", "long"],
-  "title": "Curiosity-gap title under 70 chars",
-  "title_alternatives": ["exactly 2 alternative curiosity-gap titles"],
+  "title": "Mind Trick #{n}: <curiosity title — keep the whole title under 70 chars>",
+  "title_alternatives": ["exactly 2 alternatives, each keeping the same 'Mind Trick #{n}:' prefix"],
   "description": "Full YouTube description: 120-200 words. First 1-2 lines = a hook that sells the click (this text shows in search results). Then 2-3 short paragraphs of context that tease the trick WITHOUT spoiling the mechanism. End with an engaging question, then a line of 4-6 hashtags relevant to THIS topic (like #psychology #mindtricks #didyouknow).",
   "tags": ["8-14 specific tags: mix broad (psychology, mind tricks, human behavior) and topic-specific] ,
   "hook": "80-120 words. COLD-OPEN by putting the trick ON the viewer: make them count something, choose between options, watch a demonstration unfold on someone — they must PARTICIPATE before they understand. (If the topic truly can't involve the viewer, drop them into the single most striking moment instead.) No greeting, no channel intro, no context. End on the framing question the whole video answers.",
@@ -454,12 +454,20 @@ def _pick_thumbnail(script):
             if r.strip().startswith("json"):
                 r = r[4:]
         d = json.loads(r)
-        best = max(d.get("concepts", []),
-                   key=lambda c: int(c.get("score", 0)), default=None)
+        ranked = sorted(d.get("concepts", []),
+                        key=lambda c: int(c.get("score", 0)), reverse=True)
+        best = ranked[0] if ranked else None
         if best and str(best.get("text", "")).strip():
             script["thumbnail"] = {
                 "text": str(best["text"]).strip()[:40],
-                "concept": str(best.get("concept", "")).strip()[:200]}
+                "concept": str(best.get("concept", "")).strip()[:200],
+                # the losing concepts ride along: the thumbnail A/B loop
+                # (see _thumb_check) swaps one in when this one underperforms
+                "alternates": [
+                    {"text": str(c.get("text", "")).strip()[:40],
+                     "concept": str(c.get("concept", "")).strip()[:200]}
+                    for c in ranked[1:]
+                    if str(c.get("text", "")).strip()][:2]}
             comms.log(f"thumbnail concept: '{script['thumbnail']['text']}'")
             return script["thumbnail"]
     except Exception as e:
@@ -468,11 +476,11 @@ def _pick_thumbnail(script):
     return None
 
 
-def _parse_script(text):
+def _parse_script(text, min_scenes=8):
     """JSON text -> script dict, or None (logged). A mini-doc needs its
     acts — a 4-scene stub means the provider squeezed the script (token
     cap or lazy compliance), so reject rather than render a 90-second
-    "long-form"."""
+    "long-form". Answer-Shorts pass their own floor (4 scenes)."""
     if not text:
         return None
     if text.startswith("```"):
@@ -483,20 +491,47 @@ def _parse_script(text):
         script = json.loads(text)
         if "id" not in script or "scenes" not in script:
             raise ValueError("missing keys")
-        if len(script["scenes"]) < 8:
+        if len(script["scenes"]) < min_scenes:
             raise ValueError(f"too few scenes ({len(script['scenes'])}) "
-                             f"for the 8-12 min format")
+                             f"for the {min_scenes}+ scene format")
         return script
     except Exception as e:
         comms.log(f"script parse failed: {e}")
         return None
 
 
+# the series spine: "Mind Trick #7: …" — every numbered title is an ad for
+# every other episode. Matched case-insensitively against whatever variant
+# a provider wrote ("Mind Trick #7:", "Mindtrick 7 —") so the canonical
+# prefix can be stamped back on.
+SERIES_PREFIX = re.compile(r"(?i)^mind\s*tricks?\s*#?(\d+)\s*[:.\-—–]?\s*")
+
+
+def _number_title(script, n):
+    """Force the script's title (and alternatives) onto the series spine.
+    The prompt asks for the prefix, but a squeezed provider drops it or
+    mangles the number often enough that the parse side enforces it:
+    strip whatever variant is there, stamp the canonical form with THIS
+    script's number (assigned at write time, advanced at queue time)."""
+
+    def fix(t):
+        t = SERIES_PREFIX.sub("", str(t or "").strip())
+        return f"Mind Trick #{n}: {t}"[:100].rstrip(" :-—–")
+
+    if script.get("title"):
+        script["title"] = fix(script["title"])
+    if script.get("title_alternatives"):
+        script["title_alternatives"] = [
+            fix(a) for a in script["title_alternatives"]][:2]
+    return script
+
+
 def _write_script(direction=None, research=None, feedback=None):
     direction = (direction or state.STATE.get("topic_direction")
                  or MIND_TRICKS_SEED)
     used = ", ".join(state.STATE.get("used_topics", [])[-40:]) or "none yet"
-    prompt = SCRIPT_PROMPT.format(direction=direction, used=used)
+    n = int(state.STATE.get("series_n") or 1)
+    prompt = SCRIPT_PROMPT.format(direction=direction, used=used, n=n)
     if feedback:
         # the previous draft failed a quality gate — name the problems so
         # the rewrite fixes them instead of re-rolling the same weaknesses
@@ -519,7 +554,7 @@ def _write_script(direction=None, research=None, feedback=None):
         return None          # the whole chain is silent — no nudge will help
     script = _parse_script(text)
     if script:
-        return script
+        return _number_title(script, n)
 
     # a stub script (the usual parse failure) gets ONE corrective retry
     # that names the shortfall — a blind re-roll rolls the same dice on
@@ -531,20 +566,84 @@ def _write_script(direction=None, research=None, feedback=None):
                             "archive_search, visual_keywords) — not a summary "
                             "or an outline. Never cut the scene list short."),
                   gemini_models=SCRIPT_GEMINI_MODELS)
-    return _parse_script(text)
+    script = _parse_script(text)
+    return _number_title(script, n) if script else None
+
+
+# YouTube's API budget: 10,000 units/day, every videos.insert costs 1,600,
+# so ~6 uploads a day is the hard ceiling. The window resets 07:00 UTC
+# (13:00 Dhaka). Blowing it means every upload 403s until the reset —
+# with no signal until a whole render has been wasted.
+QUOTA_MAX_UPLOADS = 6
+
+
+def _quota_window_start():
+    """Epoch moment the current YouTube quota window opened (13:00 Dhaka
+    = 07:00 UTC; before 13:00 we are still in yesterday's window)."""
+    bd = datetime.now() + config.BD_OFFSET
+    start = bd.replace(hour=13, minute=0, second=0, microsecond=0)
+    if bd < start:
+        start -= timedelta(days=1)
+    return (start - config.BD_OFFSET).timestamp()
+
+
+def _quota_used():
+    """Uploads made inside the current quota window. Finished jobs carry
+    their uploaded URLs in result.video_urls, and `updated` is the epoch
+    the report landed — a done job stamped inside the window spent its
+    inserts inside the window."""
+    start = _quota_window_start()
+    used = 0
+    for j in state.STATE.get("jobs", []):
+        if j.get("status") != "done" or (j.get("updated") or 0) < start:
+            continue
+        r = j.get("result") or {}
+        urls = (r.get("video_urls")
+                or ([r["video_url"]] if r.get("video_url") else []))
+        used += len(urls)
+    return used
+
+
+def quota_full():
+    return _quota_used() >= QUOTA_MAX_UPLOADS
+
+
+def queue_script(script, approval_id=None):
+    """Queue a finished script for rendering and advance the series spine.
+    Every queue path — the scheduler's top-up, the panel, Telegram's /idea,
+    the answer-Shorts — goes through here, so the episode numbers can never
+    fork between entry points."""
+    payload = {"script": script}
+    if approval_id:
+        payload["approval_id"] = approval_id
+    job = jobs.add_job("render", payload)
+    cloud.wake_soon("render")  # cloud runner starts within seconds
+    state.STATE.setdefault("used_topics", []).append(script.get("id", "?"))
+    state.STATE["series_n"] = int(state.STATE.get("series_n") or 1) + 1
+    state.save_soon()
+    return job
 
 
 def queue_next_video(n=1, direction=None):
-    """Generate n scripts and queue render jobs for the PC worker."""
+    """Generate n scripts and queue render jobs for the cloud worker.
+    Quota-aware: if this window's upload budget is spent, the batch is
+    deferred (not dropped) and the 13:30 scheduler slot retries it after
+    the reset."""
+    if quota_full():
+        state.STATE["quota_deferred"] = (
+            int(state.STATE.get("quota_deferred") or 0) + n)
+        state.save_soon()
+        comms.send(f"⏸️ <b>Upload quota full</b> — {n} video"
+                   f"{'s' if n != 1 else ''} deferred to after the 13:00 "
+                   f"reset (YouTube's daily API budget). The retry is "
+                   f"automatic.", html=True)
+        return 0
     made = 0
     for _ in range(n):
         script = generate_script(direction)
         if not script:
             continue
-        job = jobs.add_job("render", {"script": script})
-        cloud.wake_soon("render")  # cloud runner starts within seconds
-        state.STATE.setdefault("used_topics", []).append(script.get("id", "?"))
-        state.save_soon()
+        job = queue_script(script)
         qa = script.get("_qa") or {}
         warns = []
         if qa.get("hook", 100) < HOOK_MIN:
@@ -565,6 +664,9 @@ def queue_next_video(n=1, direction=None):
         if script.get("thumbnail"):
             msg += (f"\n🖼 Thumbnail text: "
                     f"<b>{comms.esc(script['thumbnail']['text'])}</b>")
+        msg += (f'\n🔗 <a href="{comms.panel_link("#script-" + job["id"])}">'
+                f"Read the script</a> · "
+                f'<a href="{comms.panel_link("#dec")}">decide it</a>')
         comms.send(msg, html=True)
         made += 1
     return made
@@ -1232,7 +1334,20 @@ def _mine_requests(comments):
         if entry["count"] == 2:
             comms.send(f"💬 <b>Viewers keep asking for:</b> "
                        f"{comms.esc(entry['topic'])} — it's on the "
-                       f"planner's candidate list now.", html=True)
+                       f"planner's candidate list now.\n"
+                       f'🔗 <a href="{comms.panel_link("#studio")}">Audience '
+                       f"requests in the panel</a>", html=True)
+        # two asks = a queue: draft the answer Short in the background.
+        # Marked answered BEFORE spawning so the third ask can't spawn a
+        # second draft; a paused agent or a full quota skips it entirely
+        # (the topic stays a planner candidate either way).
+        if (entry["count"] >= 2 and not entry.get("answered")
+                and not state.STATE["settings"].get("paused")
+                and not quota_full()):
+            entry["answered"] = True
+            import threading
+            threading.Thread(target=_queue_answer_short,
+                             args=(dict(entry),), daemon=True).start()
         state.save_soon()
     del mined[:-400]
 
@@ -1244,6 +1359,111 @@ def _audience_lines():
     return [f'- {r.get("topic", "?")} ({r.get("count", 0)} ask'
             f'{"s" if r.get("count", 0) != 1 else ""})'
             for r in reqs if r.get("count")][:8]
+
+
+# ---------------------------------------------------------------------------
+# answer-Shorts — the repeated ask becomes the video
+# ---------------------------------------------------------------------------
+
+SHORT_ANSWER_PROMPT = """Write ONE YouTube Short script (45-60 seconds) answering a viewer's request, for a faceless mind-tricks channel (dark psychology, persuasion tactics, brain glitches). Strict JSON only:
+
+{{
+  "id": "kebab-case-slug",
+  "format": ["short"],
+  "title": "Mind Trick #{n}: <curiosity title under 60 chars>",
+  "description": "60-100 words: hook first line, 2-3 sentences of context, one engaging question, then 3-4 hashtags.",
+  "tags": ["6-10 tags mixing psychology with the topic"],
+  "hook": "20-30 words. Cold open ON the viewer — they DO the trick in the first 5 seconds. No greeting.",
+  "scenes": [
+    {{"narration": "30-60 words, conversational, second person, present tense.",
+      "short_narration": "the same beat as narration, 30-50 words, cut to the bone",
+      "short_title": "standalone scene title under 60 chars",
+      "archive_search": ["1-3 real archival photo searches"],
+      "visual_keywords": ["2-3 stock-footage searches"],
+      "source": "short real citation for the scene's central fact",
+      "in_short": true}}
+  ],
+  "outro": "One line, max 10 words — invite the rewatch."
+}}
+
+Rules:
+- 4-6 scenes, ALL with "in_short": true. Total narration 150-300 words.
+- The trick HAPPENS on the viewer (reveal-then-replay: let it land, then explain).
+- DEFENSIVE FRAMING: reveal what is done TO people and how to spot it — never a how-to for doing it.
+- Facts must be real and named (experiment, researcher, year) when they exist; note replication failures.
+- End with a "spot it in the wild" line.
+
+The viewer request to answer: "{topic}"
+Avoid these already-used topics: {used}
+
+Return ONLY the JSON object."""
+
+
+def _write_short(topic):
+    """Draft the answer-Short for a repeated viewer request. Lighter than
+    the long-form factory: one grounded research pass, one draft, hook +
+    fact gates only (retention structure matters less at 45 seconds), and
+    a 4-scene floor instead of 8. Returns the script or None."""
+    used = ", ".join(state.STATE.get("used_topics", [])[-40:]) or "none yet"
+    n = int(state.STATE.get("series_n") or 1)
+    research = _research(f"Answer this viewer request with one concrete "
+                         f"mind trick or brain glitch: {topic}", used)
+    prompt = SHORT_ANSWER_PROMPT.format(topic=topic[:200], used=used, n=n)
+    if research and research.get("sources"):
+        prompt += ("\n\nGROUNDED RESEARCH (write from these facts; cite "
+                   "them in 'source'):\n"
+                   + json.dumps(research["sources"],
+                                ensure_ascii=False)[:2500])
+    for attempt in range(2):
+        text = gemini(prompt, gemini_models=SCRIPT_GEMINI_MODELS)
+        script = _parse_script(text, min_scenes=4) if text else None
+        if script:
+            break
+        # one corrective retry — same contract as the long-form writer
+        prompt += ("\n\nIMPORTANT: the previous attempt failed the format "
+                   "check. It must be a COMPLETE 4-6 scene script, not a "
+                   "summary or outline.")
+    if not script:
+        return None
+    script = _number_title(script, n)
+    script["format"] = ["short"]      # the worker renders ONLY the Short
+    hook, hook_reason = _score_hook(script)
+    facts_ok, problems = _fact_check(script, research)
+    script["_qa"] = {"hook": hook, "hook_reason": hook_reason,
+                     "retention": None, "retention_reason": "short — skipped",
+                     "facts": problems}
+    if hook < HOOK_MIN or problems:
+        comms.log(f"answer-short QA weak (hook {hook}, "
+                  f"{len(problems)} fact flags) — shipping with warnings")
+    _pick_thumbnail(script)
+    return script
+
+
+def _queue_answer_short(entry):
+    """Background thread: draft + queue the answer-Short for a twice-asked
+    viewer request. Called from _mine_requests with a snapshot of the
+    entry; failures log quietly (the request stays marked answered so a
+    hiccup can't spawn a queue of retries)."""
+    topic = str(entry.get("topic") or "").strip()
+    if not topic:
+        return
+    try:
+        if quota_full():
+            comms.log("answer-short deferred — upload quota full")
+            return
+        script = _write_short(topic)
+        if not script:
+            comms.log(f"answer-short for '{topic[:40]}' failed to draft")
+            return
+        job = queue_script(script)
+        comms.send(
+            f"🩳 <b>Answer Short queued</b> — {comms.esc(script['title'])}\n"
+            f"Viewers asked for {comms.esc(topic)} twice, so it becomes a "
+            f"Short ({len(script['scenes'])} scenes, 1 upload).\n"
+            f'🔗 <a href="{comms.panel_link("#script-" + job["id"])}">'
+            f"Read it</a>", html=True)
+    except Exception as e:
+        comms.log(f"answer-short thread failed: {str(e)[:80]}")
 
 
 # ---------------------------------------------------------------------------
@@ -1290,12 +1510,19 @@ def title_check():
             f"This video is underperforming. Current title: "
             f'"{v["title"]}" ({v["views"]} views).\n'
             f"Give me ONE better title — curiosity-gap, under 70 chars, "
-            f"honest (no clickbait lies). Respond with the title only.")
+            f"honest (no clickbait lies). If the title starts with a "
+            f"'Mind Trick #N:' series prefix, keep that exact prefix. "
+            f"Respond with the title only.")
         if not alt:
             continue
         alt = alt.strip().strip('"').split("\n")[0][:100]
         if alt.strip().lower() == v["title"].strip().lower():
             continue  # nothing to apply
+        # the spine survives swaps: if the rewrite dropped or mangled the
+        # episode number, stamp the original prefix back on
+        m = SERIES_PREFIX.match(v["title"])
+        if m and not SERIES_PREFIX.match(alt):
+            alt = f"Mind Trick #{m.group(1)}: {alt}"[:100]
         try:
             yt.update_title(v["id"], alt)
         except Exception as e:
@@ -1315,9 +1542,13 @@ def title_check():
             f"from: {comms.esc(v['title'])}\n"
             f"to: {comms.esc(alt)}\n"
             f"{v['views']} views after 48h+ — the new title gets a fresh "
-            f"shot at impressions. Undo: YouTube Studio → title.",
+            f"shot at impressions. Undo: YouTube Studio → title.\n"
+            f'🔗 <a href="{comms.panel_link("#desk")}">A/B verdicts in the '
+            f"panel</a>",
             html=True)
     _swap_verdicts(report)
+    _thumb_check(videos, report)
+    _thumb_verdicts(report)
 
 
 def _swap_verdicts(report):
@@ -1364,7 +1595,122 @@ def _swap_verdicts(report):
         state.save_soon()
         comms.send(f"✏️ <b>Title swap verdict</b> — "
                    f"{comms.esc(sw.get('to', '')[:60])}\n"
-                   f"{' · '.join(parts)}\n{comms.esc(verdict)}",
+                   f"{' · '.join(parts)}\n{comms.esc(verdict)}\n"
+                   f'🔗 <a href="{comms.panel_link("#desk")}">All A/B '
+                   f"verdicts</a>",
+                   html=True)
+
+
+# ---------------------------------------------------------------------------
+# thumbnail A/B — the second experiment surface
+# ---------------------------------------------------------------------------
+
+def _thumb_check(videos, report):
+    """A weak thumbnail on a 7-day-old video is a free swap: the runner
+    renders the banked alternate concept and set_thumbnail replaces the
+    image (no re-render, ~50 quota units). One swap per video ever, the
+    ledger records the pre-swap CTR/views, and _thumb_verdicts comes back
+    a week later — a clear loss reverts to the original concept."""
+    bank = state.STATE.setdefault("thumb_bank", {})
+    swaps = state.STATE.setdefault("thumb_swaps", {})
+    views_all = sorted(v["views"] for v in videos)
+    median = views_all[len(views_all) // 2] if views_all else 0
+    for v in videos:
+        if v["id"] in swaps or v["id"] not in bank:
+            continue
+        if v["published"] < PIVOT_DATE or v["privacy"] == "private":
+            continue   # legacy back catalogue / not live
+        if (v.get("duration_s") or 0) < 180:
+            continue   # Shorts ignore custom thumbnails
+        age_days = ((datetime.now() + config.BD_OFFSET
+                     - timedelta(days=7)).strftime("%Y-%m-%d"))
+        if v["published"] > age_days:
+            continue   # too young to judge
+        a = report.get(v["id"]) or {}
+        ctr = a.get("ctr")
+        weak = (v["views"] < median * 0.5
+                or (ctr is not None and ctr < 0.04))
+        if not weak:
+            continue
+        entry = bank[v["id"]]
+        alts = [x for x in (entry.get("alternates") or [])
+                if x.get("text")]
+        if not alts:
+            continue
+        new = alts[0]   # ranked by score at concept time
+        jobs.add_job("thumb", {
+            "video_url": f"https://youtu.be/{v['id']}",
+            "title": v["title"],
+            "thumbnail": new})
+        cloud.wake_soon("render")
+        swaps[v["id"]] = {
+            "from": entry.get("text", ""), "to": new.get("text", ""),
+            "concept": new.get("concept", ""),
+            "when": datetime.now().strftime("%Y-%m-%d"),
+            "pre_ctr": (round(ctr, 4) if ctr is not None else None),
+            "pre_views": v["views"], "verdict": None,
+            "video_url": f"https://youtu.be/{v['id']}",
+            "orig": {"text": entry.get("text", ""),
+                     "concept": entry.get("concept", "")}}
+        state.save_soon()
+        comms.send(
+            f"🖼 <b>Thumbnail auto-swapped</b> (underperformer)\n"
+            f"{comms.esc(v['title'][:60])}\n"
+            f"'{comms.esc(entry.get('text', ''))}' → "
+            f"'{comms.esc(new.get('text', ''))}'\n"
+            f"A week of data will say whether it worked. "
+            f"Undo: YouTube Studio → thumbnail.", html=True)
+
+
+def _thumb_verdicts(report):
+    """The A/B verdict for thumbnail swaps, a week after each one. With
+    CTR: a >15% relative gain keeps it, a >15% loss reverts automatically
+    (the runner re-sets the original concept — cheaper than a re-render).
+    Without CTR the verdict says so instead of guessing."""
+    today = datetime.now() + config.BD_OFFSET
+    swaps = state.STATE.get("thumb_swaps", {})
+    for vid, sw in swaps.items():
+        if sw.get("verdict") is not None:
+            continue
+        try:
+            when = datetime.strptime(sw.get("when") or "", "%Y-%m-%d")
+        except ValueError:
+            continue
+        if (today - when).days < 7:
+            continue
+        a = report.get(vid) or {}
+        post_ctr, post_views = a.get("ctr"), a.get("views")
+        pre_ctr, pre_views = sw.get("pre_ctr"), sw.get("pre_views", 0)
+        parts, verdict = [], None
+        if pre_ctr is not None and post_ctr is not None:
+            parts.append(f"CTR {pre_ctr * 100:.1f}% → "
+                         f"{post_ctr * 100:.1f}%")
+            gain = (post_ctr - pre_ctr) / pre_ctr if pre_ctr else 0
+            verdict = ("worked — keeping it" if gain >= 0.15
+                       else "clear loss — reverting" if gain <= -0.15
+                       else "no clear CTR change — keeping it")
+        if post_views is not None:
+            parts.append(f"views {pre_views} → {post_views}")
+        if not parts:
+            sw["verdict"] = "no data"
+            state.save_soon()
+            continue
+        if verdict is None:
+            verdict = (f"inconclusive — no CTR data; views moved "
+                       f"{pre_views} → {post_views}")
+        sw["verdict"] = verdict
+        if verdict == "clear loss — reverting" and sw.get("orig"):
+            jobs.add_job("thumb", {
+                "video_url": sw.get("video_url") or "",
+                "title": f"revert: {sw.get('to', '')[:60]}",
+                "thumbnail": sw["orig"]})
+            cloud.wake_soon("render")
+        state.save_soon()
+        comms.send(f"🖼 <b>Thumbnail swap verdict</b> — "
+                   f"'{comms.esc(sw.get('to', '')[:40])}'\n"
+                   f"{' · '.join(parts)}\n{comms.esc(verdict)}\n"
+                   f'🔗 <a href="{comms.panel_link("#desk")}">All A/B '
+                   f"verdicts</a>",
                    html=True)
 
 

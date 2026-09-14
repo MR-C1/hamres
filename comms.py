@@ -47,6 +47,21 @@ def esc(s):
     return _html.escape(str(s or ""))
 
 
+def panel_link(path=""):
+    """One-tap deep link into the control panel, for HTML Telegram
+    messages: panel_link("#dec") -> https://…/panel#dec. The path is a
+    panel hash (tab or #script-<jobid>); it is interpolated into our own
+    URL, never echoed back, so no escaping is needed."""
+    base = (config.PANEL_URL or "").rstrip("/")
+    return f"{base}/panel{path}"
+
+
+def panel_footer(path=""):
+    """The standard 'open it in the panel' line appended to HTML messages.
+    Every notification carries a one-tap path to the thing it's about."""
+    return f'\n🔗 <a href="{panel_link(path)}">Open it in the panel</a>'
+
+
 def md(text):
     """Escape for HTML, then convert common markdown to Telegram HTML."""
     s = esc(text)

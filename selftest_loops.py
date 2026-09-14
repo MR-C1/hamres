@@ -9,6 +9,12 @@ keys. Three loops, one suite:
     qualify, 20% margin before a move, announcement on move, fallback
   - title-swap verdicts: pre-swap CTR captured in the ledger, verdict at
     7 days (worked / no gain / inconclusive / no data), once ever
+  - quota-aware planning: the 13:00 BD window, done-upload counting, the
+    defer when the window is full
+  - answer-Shorts: the second ask drafts the Short once ever, full quota
+    defers, _write_short's 4-scene floor and short-only format
+  - thumbnail A/B: the weak-video swap with banked alternates, the
+    ledger, and the 7-day verdict (win keeps, clear loss reverts)
 
     python selftest_loops.py
 """
@@ -49,6 +55,12 @@ def main():
 
     orig_gemini = brain.gemini
 
+    # the spawn is live in _mine_requests — pin it to a no-op so section
+    # 1's second ask can't fire a REAL background draft that would race
+    # the scripted gemini replies (section 5 fakes it properly)
+    real_qas = brain._queue_answer_short
+    brain._queue_answer_short = lambda entry: None
+
     def c(cid, text, author="A"):
         return {"comment_id": cid, "text_plain": text, "text": text,
                 "author": author, "published": "2026-09-12"}
@@ -83,9 +95,10 @@ def main():
     check("mine: provider failure fails open (no entry, no raise)",
           len(reqs) == 1)
 
-    # once ever per comment: re-mining the same ids does nothing
+    # once ever per comment: re-mining the same ids does nothing (the
+    # ledger check skips the comment before gemini is ever called — no
+    # reply is appended, and none would be consumed)
     brain.gemini = fake_gemini
-    replies.append('{"topic": "should not appear"}')
     brain._mine_requests([c("c1", "please do a video on lost gold ships")])
     check("mine: mined ledger prevents double counting",
           len(reqs) == 1 and reqs[0]["count"] == 2)
@@ -258,6 +271,212 @@ def main():
     check("verdict: nothing at all -> no data, marked done",
           st.STATE["title_swaps"]["v6"]["verdict"] == "no data")
 
+    # ------------------------------------------------------------------
+    # 4. quota-aware planning (clock still pinned: 2026-09-12 20:00 BD)
+    # ------------------------------------------------------------------
+    # the window opened at 13:00 BD today = 07:00 UTC; the expected epoch
+    # is computed with the same naive-datetime conversion the brain uses,
+    # so the check holds on any machine's timezone
+    win_start = datetime(2026, 9, 12, 7, 0).timestamp()
+
+    def dj(updated, urls):
+        return {"id": f"j{int(updated)}", "type": "render",
+                "status": "done", "updated": updated,
+                "result": {"video_urls": urls}}
+
+    st.STATE["jobs"] = [
+        dj(win_start + 60, ["u1", "u2", "u3"]),   # 3 uploads this window
+        dj(win_start - 60, ["u4"]),               # last window: ignored
+        {"id": "jx", "type": "render", "status": "failed",
+         "updated": win_start + 60, "result": {}},   # failed: ignored
+    ]
+    check("quota: window opens at 13:00 BD (07:00 UTC)",
+          abs(brain._quota_window_start() - win_start) < 1)
+    check("quota: counts done uploads inside the window only",
+          brain._quota_used() == 3)
+    check("quota: 3 of 6 is not full", not brain.quota_full())
+    st.STATE["jobs"].append(dj(win_start + 120, ["u5", "u6", "u7"]))
+    check("quota: 6 uploads fills the window", brain.quota_full())
+
+    # a full window defers the batch instead of generating into a wall
+    st.STATE["quota_deferred"] = 0
+    sent.clear()
+    made = brain.queue_next_video(1)
+    check("quota: full window defers, nothing generated",
+          made == 0 and st.STATE["quota_deferred"] == 1
+          and any("quota full" in m for m in sent))
+    st.STATE["jobs"] = []
+    st.STATE["quota_deferred"] = 0
+
+    # ------------------------------------------------------------------
+    # 5. answer-Shorts: the second ask spawns the draft
+    # ------------------------------------------------------------------
+    import threading as _th
+    got, ev = {}, _th.Event()
+
+    def fake_qas(entry):
+        got.update(entry)
+        ev.set()
+    orig_qas, orig_qf = brain._queue_answer_short, brain.quota_full
+    brain._queue_answer_short = fake_qas
+    brain.quota_full = lambda: False
+    st.STATE["settings"]["paused"] = False
+
+    replies.append('{"topic": "mirror touch illusion"}')
+    brain._mine_requests([c("c9", "please cover the mirror touch illusion")])
+    check("answer-short: one ask spawns nothing", not ev.is_set())
+    replies.append('{"topic": "Mirror Touch Illusion"}')   # same dedupe key
+    brain._mine_requests([c("c10", "mirror touch again please", author="Z")])
+    check("answer-short: the second ask drafts the Short",
+          ev.wait(2) and got.get("topic") == "Mirror Touch Illusion")
+    entry = next(e for e in st.STATE["audience_requests"]
+                 if e["key"] == "mirror touch illusion")
+    check("answer-short: the request is marked answered (once ever)",
+          entry.get("answered") is True)
+    ev.clear()
+    replies.append('{"topic": "mirror touch illusion"}')
+    brain._mine_requests([c("c11", "a third mirror touch ask", author="Y")])
+    check("answer-short: the third ask never re-spawns",
+          not ev.wait(0.3) and entry["count"] == 3)
+
+    # a full quota skips the spawn and leaves the request unanswered
+    brain.quota_full = lambda: True
+    replies.append('{"topic": "priming numbers"}')
+    brain._mine_requests([c("c12", "do one on priming numbers")])
+    replies.append('{"topic": "Priming Numbers"}')
+    brain._mine_requests([c("c13", "priming numbers please", author="W")])
+    entry2 = next(e for e in st.STATE["audience_requests"]
+                  if e["key"] == "priming numbers")
+    check("answer-short: full quota defers the spawn (no answered mark)",
+          not ev.is_set() and entry2["count"] == 2
+          and not entry2.get("answered"))
+    brain.quota_full = orig_qf
+
+    # _write_short: 4 scenes parse, short-only, numbered, QA attached
+    orig_research, orig_hook = brain._research, brain._score_hook
+    orig_fact, orig_pick = brain._fact_check, brain._pick_thumbnail
+    brain._research = lambda d, u: None
+    brain._score_hook = lambda s: (80, "fine")
+    brain._fact_check = lambda s, r: (True, [])
+    brain._pick_thumbnail = lambda s: None
+    st.STATE["series_n"] = 5
+    short_json = ('{"id": "mirror-touch", "title": "mind trick #5: You Feel '
+                  'What You See", "format": ["short"], "hook": "Touch your '
+                  'own cheek. Now watch my hand.", "scenes": ['
+                  + ",".join('{"narration": "Scene %d words here.", '
+                             '"short_narration": "Scene %d.", '
+                             '"short_title": "T%d", "archive_search": ["a"], '
+                             '"visual_keywords": ["k"], "source": "s", '
+                             '"in_short": true}' % (i, i, i)
+                             for i in range(4))
+                  + '], "outro": "Watch it again."}')
+    replies.append(short_json)
+    sc = brain._write_short("mirror touch illusion")
+    check("write-short: 4 scenes parse with the short floor",
+          sc is not None and len(sc["scenes"]) == 4)
+    check("write-short: short-only format + numbered spine",
+          sc["format"] == ["short"]
+          and sc["title"] == "Mind Trick #5: You Feel What You See")
+    check("write-short: hook + fact gates ran, retention skipped",
+          sc["_qa"]["hook"] == 80 and sc["_qa"]["facts"] == []
+          and sc["_qa"]["retention"] is None)
+    # a 2-scene stub is rejected (min_scenes=4), retried, rejected -> None
+    replies.append('{"id": "stub", "title": "T", "hook": "h", '
+                   '"scenes": [{"narration": "a", "visual_keywords": ["k"]},'
+                   '{"narration": "b", "visual_keywords": ["k"]}]}')
+    replies.append("")     # the retry gets nothing back
+    check("write-short: under-floor stubs never ship",
+          brain._write_short("stub topic") is None)
+    brain._research, brain._score_hook = orig_research, orig_hook
+    brain._fact_check, brain._pick_thumbnail = orig_fact, orig_pick
+
+    # ------------------------------------------------------------------
+    # 6. thumbnail A/B (pivot floor dropped for mechanics, as in the
+    #    title-swap suite; clock still pinned)
+    # ------------------------------------------------------------------
+    orig_pivot = brain.PIVOT_DATE
+    brain.PIVOT_DATE = "2000-01-01"
+    st.STATE["thumb_bank"] = {
+        "t1": {"text": "OLD", "concept": "old concept",
+               "alternates": [{"text": "NEW", "concept": "new concept"}]},
+        "t3": {"text": "NOALT", "concept": "x", "alternates": []},
+        "t5": {"text": "T5", "concept": "y",
+               "alternates": [{"text": "T5NEW", "concept": "y2"}]},
+        "t6": {"text": "T6", "concept": "z",
+               "alternates": [{"text": "T6NEW", "concept": "z2"}]},
+    }
+    st.STATE["thumb_swaps"] = {}
+    orig_add_job, orig_wake = brain.jobs.add_job, brain.cloud.wake_soon
+    added = []
+    brain.jobs.add_job = lambda t, p: (added.append((t, p)),
+                                       {"id": "thumbjob"})[1]
+    brain.cloud.wake_soon = lambda *a, **k: None
+    old = (datetime(2026, 9, 12) - timedelta(days=10)).strftime("%Y-%m-%d")
+    fresh = (datetime(2026, 9, 12) - timedelta(days=2)).strftime("%Y-%m-%d")
+    vids = [
+        # long, 10 days old, weak by CTR -> swap
+        {"id": "t1", "title": "Mind Trick #3: X", "views": 5,
+         "privacy": "public", "published": old, "duration_s": 400},
+        {"id": "t2", "title": "Big", "views": 100, "privacy": "public",
+         "published": old, "duration_s": 400},
+        {"id": "t4", "title": "Mid", "views": 70, "privacy": "public",
+         "published": old, "duration_s": 400},
+        # weak by CTR but no alternates banked -> skip
+        {"id": "t3", "title": "NoAlt", "views": 5, "privacy": "public",
+         "published": old, "duration_s": 400},
+        # weak + alternates but only 2 days old -> too young
+        {"id": "t5", "title": "Young", "views": 5, "privacy": "public",
+         "published": fresh, "duration_s": 400},
+        # weak + old but a Short (under 3 min) -> Shorts ignore thumbnails
+        {"id": "t6", "title": "Shorty", "views": 5, "privacy": "public",
+         "published": old, "duration_s": 60},
+    ]
+    # weakness comes from CTR (< 4%): four videos sit at 5 views, so the
+    # views-vs-median route could never fire (the median IS 5)
+    ctr_report = {"t1": {"ctr": 0.02}, "t3": {"ctr": 0.02},
+                  "t5": {"ctr": 0.02}, "t6": {"ctr": 0.02}}
+    sent.clear()
+    brain._thumb_check(vids, ctr_report)
+    check("thumb: the underperformer with alternates gets one swap job",
+          len(added) == 1 and added[0][0] == "thumb"
+          and added[0][1]["thumbnail"]["text"] == "NEW"
+          and added[0][1]["video_url"] == "https://youtu.be/t1")
+    sw = st.STATE["thumb_swaps"]["t1"]
+    check("thumb: the ledger records from/to and the original for revert",
+          sw["from"] == "OLD" and sw["to"] == "NEW"
+          and sw["orig"] == {"text": "OLD", "concept": "old concept"}
+          and sw["verdict"] is None)
+    check("thumb: the swap is announced", any("Thumbnail auto-swapped" in m
+                                              for m in sent))
+    # second pass: the ledger blocks a re-swap
+    added.clear()
+    brain._thumb_check(vids, ctr_report)
+    check("thumb: one swap per video ever", not added)
+
+    # verdicts: a clear CTR loss reverts via a second thumb job
+    sw["when"] = "2026-09-01"
+    sw["pre_ctr"] = 0.040
+    added.clear()
+    sent.clear()
+    brain._thumb_verdicts({"t1": {"ctr": 0.010, "views": 60}})
+    check("thumb verdict: clear loss reverts to the original concept",
+          any(t == "thumb" and p["thumbnail"]["text"] == "OLD"
+              for t, p in added)
+          and "revert" in sw["verdict"])
+    check("thumb verdict: the revert is announced",
+          any("Thumbnail swap verdict" in m for m in sent))
+    # a win keeps it: no second job
+    sw["verdict"] = None
+    sw["pre_ctr"] = 0.020
+    added.clear()
+    brain._thumb_verdicts({"t1": {"ctr": 0.035, "views": 90}})
+    check("thumb verdict: a win keeps the new concept (no job)",
+          not added and "worked" in sw["verdict"])
+    brain.PIVOT_DATE = orig_pivot
+    brain.jobs.add_job = orig_add_job
+    brain.cloud.wake_soon = orig_wake
+
+    brain._queue_answer_short = real_qas
     brain.comms.send = orig_send
     brain.gemini = orig_gemini
     brain.datetime = orig_dt

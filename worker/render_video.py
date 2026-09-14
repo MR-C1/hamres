@@ -540,6 +540,22 @@ def render(script_path, config):
     return render_from_dict(script, config)
 
 
+def pick_formats(script, rconf):
+    """Which formats this script renders: the hook-Short, the long-form,
+    then one STANDALONE scene-Short per pick_extra_shorts pick
+    ("xshort{scene_index}", appended by the caller — render.shorts_per_video
+    caps them; see pick_extra_shorts for the upload-quota arithmetic).
+    A script whose "format" is short-only (answer-Shorts from comment
+    requests) renders JUST the Short: no long, no extras — 1 upload, not
+    3. Returns (want_set, formats)."""
+    want = set(script.get("format") or ["short", "long"])
+    formats = ([("short", rconf["short_width"], rconf["short_height"])]
+               if "short" in want else [])
+    if "long" in want:
+        formats.append(("long", rconf["long_width"], rconf["long_height"]))
+    return want, formats
+
+
 def render_from_dict(script, config):
     """Render from an in-memory script dict (used by the agent worker)."""
     script = validate_script(script)
@@ -589,14 +605,13 @@ def render_from_dict(script, config):
     outputs = []
     credits = []      # archival attributions for the description
     blocks_long = []  # long-form scene order, for the description chapters
-    # formats: the hook-Short, the long-form, then one STANDALONE
-    # scene-Short per pick_extra_shorts pick ("xshort{scene_index}").
-    # render.shorts_per_video caps them (default 1 — see pick_extra_shorts
-    # for the upload-quota arithmetic).
-    extra_shorts = pick_extra_shorts(
+    # which formats to render (see pick_formats); scene-Shorts only exist
+    # for full videos — a short-only script's extras would turn 1 upload
+    # into 3 and defeat the point
+    want, formats = pick_formats(script, rconf)
+    extra_shorts = (pick_extra_shorts(
         script, durations, int(rconf.get("shorts_per_video", 1)))
-    formats = [("short", rconf["short_width"], rconf["short_height"]),
-               ("long", rconf["long_width"], rconf["long_height"])]
+        if "long" in want else [])
     for idx, _s in extra_shorts:
         formats.append((f"xshort{idx}", rconf["short_width"],
                         rconf["short_height"]))

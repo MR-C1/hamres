@@ -72,6 +72,11 @@ GITHUB_DISPATCH_TOKEN = os.environ.get("GITHUB_DISPATCH_TOKEN", "")
 
 BD_OFFSET = timedelta(hours=6)  # Render's clock is UTC; Bangladesh is UTC+6
 
+# The panel's public URL — Telegram messages carry one-tap deep links into
+# the exact panel view they're about (#dec, #script-<job>, …). Env var so a
+# service rename needs no code change.
+PANEL_URL = os.environ.get("PANEL_URL", "https://hamres.onrender.com")
+
 # Quality-first cadence (2026-09): the retention data said daily volume
 # wasn't buying growth — longs held ~2.5% vs shorts 12.3% — so the budget
 # moved from quantity to script quality (3 QA-gated drafts per topic).

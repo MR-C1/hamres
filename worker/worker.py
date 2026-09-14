@@ -71,7 +71,14 @@ def send_video_preview(path, approval_id, title, url=""):
                f"⚡ Already uploaded (private) — no time limit. "
                f"✅ makes it public; ❌ deletes it. ")
     if url:
-        caption += f"<a href=\"{_esc(url)}\">Watch it</a>."
+        caption += f"<a href=\"{_esc(url)}\">Watch it</a>. "
+    # one tap from the notification to the decision: the panel's Decisions
+    # tab holds the same ✅/❌ (plus title alternatives and the script)
+    try:
+        caption += (f'<a href="{CFG["agent"]["url"].rstrip("/")}/panel#dec">'
+                    f"Open the panel</a>.")
+    except Exception:
+        pass
     with open(path, "rb") as f:
         r = requests.post(
             f"{api}/sendDocument" if path.stat().st_size > 10 << 20
@@ -165,6 +172,9 @@ def do_render(job):
         # URL is the long (the report side keys the timeline by it)
         "timeline": timeline,
         "format_urls": up.get("format_urls", {}),
+        # the chosen + alternate thumbnail concepts, banked by the brain
+        # under the long's video id — the A/B loop reads them a week later
+        "thumbnail": script.get("thumbnail") or None,
     }
     if not up.get("video_url"):
         # upload failed (dead token, YouTube's daily upload cap, ...). The
@@ -390,7 +400,30 @@ def do_cleanup(job):
     return {"ok": True, "msg": f"removed {len(removed)} files"}
 
 
-HANDLERS = {"render": do_render, "cleanup": do_cleanup}
+def do_thumb(job):
+    """Thumbnail swap on an already-uploaded long-form (the A/B loop in
+    brain._thumb_check): render the banked concept to a PNG and
+    thumbnails.set it — no re-render, ~50 quota units, instant effect."""
+    from make_thumbnails import make_thumbnail
+    import upload
+    concept = job.get("thumbnail") or {}
+    script = {"id": job["id"], "title": job.get("title", ""),
+              "thumbnail": {"text": concept.get("text", ""),
+                            "concept": concept.get("concept", "")}}
+    thumb = REVIEW / f"thumb_{job['id']}.png"
+    REVIEW.mkdir(parents=True, exist_ok=True)
+    make_thumbnail(script, thumb, None)
+    try:
+        upload.set_thumbnail(job["video_url"], thumb, CFG)
+    finally:
+        thumb.unlink(missing_ok=True)
+    log.info("thumbnail set on %s ('%s')",
+             job.get("video_url", ""), concept.get("text", ""))
+    return {"ok": True, "title": job.get("title", ""),
+            "msg": f"thumbnail set: {concept.get('text', '')}"}
+
+
+HANDLERS = {"render": do_render, "cleanup": do_cleanup, "thumb": do_thumb}
 
 
 def guard_disk():

@@ -335,6 +335,7 @@ def main():
     fake_comms_mod.send_buttons = fake_send
     fake_comms_mod.log = lambda m: fake_comms_mod.LOG.append(m)
     fake_comms_mod.register_menu = lambda: None
+    fake_comms_mod.panel_link = lambda path="": f"https://panel.test/panel{path}"
 
     fake_yt = types.ModuleType("_st_fake_yt")
 

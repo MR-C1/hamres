@@ -206,6 +206,64 @@ def main():
     check("cleanup removes xshort finals and blocks",
           not any(p.exists() for p in files))
 
+    # 9. format-aware rendering: a short-only script (answer-Shorts) is
+    #    ONE format — no long, no standalone scene-Shorts (1 upload, not 3)
+    rconf = {"short_width": 1080, "short_height": 1920,
+             "long_width": 1920, "long_height": 1080,
+             "shorts_per_video": 1}
+    want, fmts = render_video.pick_formats({"format": ["short"]}, rconf)
+    check("short-only script renders exactly the Short",
+          want == {"short"} and [f[0] for f in fmts] == ["short"])
+    want2, fmts2 = render_video.pick_formats({}, rconf)
+    check("legacy script (no format key) renders short + long",
+          want2 == {"short", "long"}
+          and [f[0] for f in fmts2] == ["short", "long"])
+    want3, fmts3 = render_video.pick_formats({"format": ["long"]}, rconf)
+    check("long-only script renders exactly the long",
+          want3 == {"long"} and [f[0] for f in fmts3] == ["long"])
+
+    # 10. the thumb job: render the banked concept, set it, clean up
+    thumb_calls = []
+    mt = types.ModuleType("make_thumbnails")
+
+    def fake_make_thumbnail(script, out_path, video_path=None):
+        Path(out_path).write_bytes(b"png")
+        thumb_calls.append({"kind": "render", "text":
+                            script["thumbnail"]["text"],
+                            "concept": script["thumbnail"]["concept"]})
+    mt.make_thumbnail = fake_make_thumbnail
+    up2 = types.ModuleType("upload")
+    up2.set_thumbnail = lambda url, path, cfg=None: thumb_calls.append(
+        {"kind": "set", "on": url, "file": Path(path).name})
+    real_mt = sys.modules.get("make_thumbnails")
+    real_up2 = sys.modules.get("upload")
+    sys.modules["make_thumbnails"] = mt
+    sys.modules["upload"] = up2
+    worker_mod.CFG = {}
+    try:
+        res = worker_mod.do_thumb({
+            "id": "tj1", "video_url": "https://youtu.fake/abc",
+            "title": "Mind Trick #3: X",
+            "thumbnail": {"text": "NEW", "concept": "eyes wide"}})
+    finally:
+        if real_mt is None:
+            sys.modules.pop("make_thumbnails", None)
+        else:
+            sys.modules["make_thumbnails"] = real_mt
+        if real_up2 is None:
+            sys.modules.pop("upload", None)
+        else:
+            sys.modules["upload"] = real_up2
+    check("thumb job renders the banked concept",
+          thumb_calls[0] == {"kind": "render", "text": "NEW",
+                             "concept": "eyes wide"})
+    check("thumb job sets it on the video and cleans the PNG",
+          thumb_calls[1] == {"kind": "set", "on": "https://youtu.fake/abc",
+                             "file": "thumb_tj1.png"}
+          and not (REVIEW / "thumb_tj1.png").exists())
+    check("thumb job reports ok with its text", res.get("ok") is True
+          and "NEW" in res.get("msg", ""))
+
     print()
     if FAILS:
         print(f"{len(FAILS)} FAILED: {', '.join(FAILS)}")

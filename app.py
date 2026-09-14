@@ -784,6 +784,16 @@ body[data-role="visitor"] .field input{pointer-events:none;background:var(--wash
        has 50+ views and a stored timeline. -->
   <div class="card" id="scenecard" hidden></div>
 
+  <!-- The channel's own experiments: auto title swaps and thumbnail swaps,
+       each with its verdict once a week of data has passed. -->
+  <div class="sec" id="sec-ab" hidden><h2>A/B experiments</h2><span class="note">Titles and thumbnails the agent swapped on underperformers, and what a week of data said.</span></div>
+  <div class="card" id="abcard" style="padding:4px 18px" hidden>
+    <div class="tblwrap"><table class="rtable" aria-label="A/B experiment verdicts">
+      <thead><tr><th>What</th><th>From → To</th><th>When</th><th>Verdict</th></tr></thead>
+      <tbody id="abrows"></tbody>
+    </table></div>
+  </div>
+
   <div class="sec"><h2>Render queue</h2><span class="note" id="queuenote"></span></div>
   <div class="card" style="padding:4px 18px">
     <div class="tblwrap"><table class="rtable" aria-label="Render queue">
@@ -882,6 +892,12 @@ body[data-role="visitor"] .field input{pointer-events:none;background:var(--wash
     </div>
   </div>
 
+  <!-- Audience demand mined from comments: two asks on the same topic and
+       the agent drafts an answer Short by itself. The chips make the list
+       actionable — one tap drops the request into the commission box. -->
+  <div class="sec" id="sec-audience" hidden><h2>Audience requests</h2><span class="note">What viewers asked for in comments. Asked twice, the agent answers it with a Short automatically.</span></div>
+  <div class="card" id="audiencebox" hidden style="padding:14px 18px"></div>
+
   <div class="sec"><h2>Ask the manager</h2><span class="note">The same brain that plans the channel, with its numbers in front of it.</span></div>
   <div class="card">
     <label for="ask" style="display:block;font-size:13.5px;color:var(--muted);margin-bottom:8px">Question</label>
@@ -962,6 +978,23 @@ body[data-role="visitor"] .field input{pointer-events:none;background:var(--wash
     </div>
     <div class="help" id="dirhelp">Every new script is written against this text. Re-planning rewrites it.</div>
     <div class="help" id="audline" hidden style="margin-top:6px"></div>
+  </div>
+
+  <!-- Channel identity: the About text and search keywords live on YouTube
+       (not in this repo) — the niche pivot proved the panel needs to reach
+       them. Loaded on demand (one API call), saved through the same
+       branding action the Telegram side uses. -->
+  <div class="sec"><h2>Channel identity</h2><span class="note">The About text and search keywords viewers and YouTube search see. Saved straight to the channel.</span></div>
+  <div class="card">
+    <label for="branddesc" style="display:block;font-size:13.5px;color:var(--muted);margin-bottom:8px">About text</label>
+    <textarea id="branddesc" maxlength="1000" style="min-height:120px" placeholder="Press Load to fetch the current About text from YouTube"></textarea>
+    <label for="brandkeys" style="display:block;font-size:13.5px;color:var(--muted);margin:10px 0 8px">Search keywords (comma- or space-separated)</label>
+    <input type="text" id="brandkeys" maxlength="500" placeholder="Press Load to fetch the current keywords">
+    <div class="actions" style="margin-top:12px">
+      <button class="btn" data-local="brandload">Load current</button>
+      <button class="btn btn-primary" data-confirm="Overwrite the channel's About text and keywords on YouTube?" data-local="brandsave">Save to YouTube</button>
+    </div>
+    <div class="help">Keywords are what YouTube search matches against; the About text is what viewers read on the channel page.</div>
   </div>
 
   <div class="sec"><h2>Used topics</h2><span class="note">Already filmed; kept off future scripts. Remove one to allow it again.</span></div>
@@ -1133,13 +1166,14 @@ const NICE = {next:"New video queued", idea:"Script queued", chat:"Asked the man
   clear_out:"Answers cleared", reply:"Reply posting", skipreply:"Reply dropped",
   title:"Renaming", keeptitle:"Title kept", report:"Report on its way",
   plan:"Planning", titlecheck:"Checking titles", comments:"Reading comments",
-  diag:"Testing the providers"};
+  diag:"Testing the providers", branding:"Channel identity saved"};
 const BUSY = {next:"Queueing…", idea:"Writing…", chat:"Asking…", publish:"Publishing…",
   reject:"Deleting…", retry:"Requeueing…", pause:"Pausing…", resume:"Resuming…",
   clear_failed:"Clearing…", clear_all:"Clearing…", clear_out:"Clearing…",
   reset:"Resetting…", toggle_auto:"Switching…", refresh_channel:"Refreshing…",
   wake:"Waking…", direction:"Saving…", report:"Writing…", plan:"Planning…",
-  titlecheck:"Checking…", comments:"Reading…", diag:"Testing…"};
+  titlecheck:"Checking…", comments:"Reading…", diag:"Testing…",
+  branding:"Saving…"};
 const HEAD = a => String(a).split(":")[0];
 
 function busyOn(btn, label){
@@ -1725,12 +1759,40 @@ function render(){
      sees the same list, this is the owner's eye on it */
   const aud = $("audline");
   if (aud) {
-    const wants = (d.audience || []).filter(w => / \(\d+\)$/.test(w) && parseInt(w.match(/ \((\d+)\)$/)[1], 10) >= 2);
+    const wants = (d.audience || []).filter(w => w.count >= 2).map(w => w.topic);
     aud.hidden = !wants.length;
     aud.innerHTML = wants.length
       ? "💬 Viewers asked for: " + esc(wants.join(", "))
       : "";
   }
+  /* the actionable view of the same list: one tap drops a request into
+     the commission box; two-plus asks are flagged (the agent answers
+     those with a Short on its own) */
+  const wants = d.audience || [];
+  $("sec-audience").hidden = $("audiencebox").hidden = !wants.length;
+  if (wants.length) {
+    $("audiencebox").innerHTML = '<div class="tags">' + wants.map(w =>
+      '<span class="chip" style="cursor:pointer" data-local="asktopic" data-topic="'
+      + esc(w.topic) + '" title="Drop this into the commission box">'
+      + esc(w.topic) + " · asked " + w.count + "×"
+      + (w.count >= 2 ? " · answered with a Short" : "")
+      + "</span>").join("") + "</div>";
+  }
+
+  /* A/B experiments: title + thumbnail swaps and their verdicts. Pending
+     ones say when their week of data is up; decided ones carry the verdict
+     (a clear thumbnail loss says it reverted itself). */
+  const swaps = d.swaps || [];
+  $("sec-ab").hidden = $("abcard").hidden = !swaps.length;
+  $("abrows").innerHTML = swaps.map(s =>
+    "<tr><td>" + esc(s.kind) + "</td>" +
+    '<td><a class="ttl" href="https://youtu.be/' + esc(s.vid) +
+    '" target="_blank" rel="noopener">' + esc(s.from) + "</a>" +
+    ' → <span class="ttl" style="color:var(--blue)">' + esc(s.to) + "</span></td>" +
+    "<td>" + esc(dayLabel(s.when)) + "</td>" +
+    "<td>" + (s.verdict ? esc(s.verdict)
+              : '<span class="note">a week of data, then the verdict</span>') +
+    "</td></tr>").join("");
   $("topics").innerHTML = d.used_topics.length
     ? d.used_topics.map(t => '<span class="chip">'+esc(t)+
         '<button class="x" data-act="forget:'+esc(t)+'" title="Allow this topic again" aria-label="Allow '+esc(t)+' again">×</button></span>').join("")
@@ -1765,6 +1827,26 @@ function render(){
 
   /* ledger */
   if (ledgerOn()) paintLedger();
+
+  /* a Telegram deep link (#script-<jobid>) opens its script once the
+     jobs table carrying it has rendered */
+  deepLinkScript();
+}
+
+/* ---- Telegram deep links ----------------------------------------------
+   Every panel notification now carries a one-tap link. Tabs were already
+   hash-routed; the one hash that needs help is #script-<jobid> — the
+   script lives in the Desk's queue table, so this waits for a render that
+   has it, then opens the viewer. Once per link, ever: a 15s poll re-running
+   render() must not re-open a modal the reader just closed. */
+let OPENED_SCRIPT = "";
+function deepLinkScript(){
+  const m = /^#script-([A-Za-z0-9]+)/.exec(location.hash || "");
+  if (!m || OPENED_SCRIPT === m[1]) return;
+  if (document.querySelector('[data-script="' + m[1] + '"]')) {
+    OPENED_SCRIPT = m[1];
+    viewScript(m[1], null);
+  }
 }
 
 /* ---- fields the reader is editing -------------------------------------------
@@ -1785,6 +1867,34 @@ const LOCAL = {
     $("direction").value = (DATA && DATA.direction) || "";
     syncDirty();
     toast("Back to the agent's own words");
+  },
+  /* the identity card's two fields are one payload payload() can't build
+     (it carries a single data-from field), so the load and the save are
+     browser-side plumbing around the same /api/action branding call */
+  brandload: async (b) => {
+    busyOn(b, "Loading…");
+    jlog("panel", "I loaded the channel identity");
+    try {
+      const r = await fetch("/api/action", {method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({action: "branding"})});
+      const d = await r.json();
+      if (d.ok) {
+        $("branddesc").value = (d.branding && d.branding.description) || "";
+        $("brandkeys").value = (d.branding && d.branding.keywords) || "";
+        toast("Identity loaded");
+      } else toast(d.error || "Couldn't load the identity", true);
+    } catch(e) { toast("Network error — couldn't load the identity.", true); }
+    busyOff(b);
+  },
+  brandsave: (b) => {
+    act("branding", b, {description: $("branddesc").value,
+                        keywords: $("brandkeys").value});
+  },
+  asktopic: (b) => {
+    $("idea").value = b.dataset.topic || "";
+    $("idea").focus();
+    toast("Dropped into the commission box");
   },
   csvfilms: () => {
     if (!DATA) return;
@@ -2770,9 +2880,27 @@ def api_state():
                  for j in jobs_list],
         "direction": state.STATE.get("topic_direction", ""),
         # audience-demand mining: what viewers asked for in comments
-        "audience": [f"{r.get('topic', '?')} ({r.get('count', 0)})"
+        "audience": [{"topic": r.get("topic", "?"),
+                      "count": r.get("count", 0)}
                      for r in state.STATE.get("audience_requests", [])
                      if r.get("count")][:6],
+        # the A/B experiment ledgers: title swaps + thumbnail swaps with
+        # their verdicts (both one-shot per video, see brain.title_check
+        # and brain._thumb_check)
+        "swaps": sorted(
+            [{"kind": "Title", "vid": vid,
+              "from": (s.get("from") or "")[:70],
+              "to": (s.get("to") or "")[:70],
+              "when": s.get("when", ""),
+              "verdict": s.get("verdict")}
+             for vid, s in state.STATE.get("title_swaps", {}).items()]
+            + [{"kind": "Thumb", "vid": vid,
+                "from": (s.get("from") or "")[:40],
+                "to": (s.get("to") or "")[:40],
+                "when": s.get("when", ""),
+                "verdict": s.get("verdict")}
+               for vid, s in state.STATE.get("thumb_swaps", {}).items()],
+            key=lambda s: str(s.get("when")), reverse=True)[:20],
         "used_topics": state.STATE.get("used_topics", [])[-25:],
         "best_hour": state.STATE.get("best_hour", 17),
         # scene-aware retention: one compact finding per mapped film
@@ -2879,6 +3007,17 @@ def api_action():
             "description": (sc.get("description") or "")[:900],
             "tags": (sc.get("tags") or [])[:15],
             "scenes": scenes}})
+    # the channel identity: the READ is public panel info (the About text
+    # is public on YouTube anyway); only the WRITE is admin-gated below.
+    # These fields live on YouTube, not in this repo, so a niche pivot
+    # needs this to carry the new identity across.
+    if a == "branding" and not (data.get("description")
+                                or data.get("keywords")):
+        try:
+            cur = yt.channel_branding() or {}
+            return jsonify({"ok": True, "branding": cur})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)[:200]}), 500
     # a visitor sees everything but can change nothing; the panel hides its
     # controls too, but the server is the wall
     if not _panel_admin():
@@ -2887,14 +3026,7 @@ def api_action():
     state.default_state()
     import cloud
     if a == "branding":
-        # the channel's About text + search keywords — read with no
-        # fields, write with description/keywords. These live on
-        # YouTube (not in this repo), so a niche pivot needs this to
-        # carry the new identity across.
         try:
-            if not (data.get("description") or data.get("keywords")):
-                cur = yt.channel_branding() or {}
-                return jsonify({"ok": True, "branding": cur})
             yt.update_branding(description=data.get("description"),
                                keywords=data.get("keywords"))
             cur = yt.channel_branding() or {}
@@ -2922,16 +3054,14 @@ def api_action():
                 comms.send("⚠️ Couldn't draft that one — every AI provider "
                            "refused. Try a different wording.", html=True)
                 return
-            import uuid as _uuid
-            jobs.add_job("render", {"script": script,
-                                    "approval_id": _uuid.uuid4().hex[:10]})
-            cloud.wake_soon("render")
-            state.STATE.setdefault("used_topics", []).append(
-                script.get("id", "?"))
-            state.save_soon()
+            # through brain.queue_script so the series spine advances on
+            # custom videos too (a fork here would double-book a number)
+            job = brain.queue_script(script)
             comms.log(f"queued custom video: {script['title'][:50]}")
             comms.send(f"🎬 <b>Custom video queued</b> — "
-                       f"{comms.esc(script['title'])}", html=True)
+                       f"{comms.esc(script['title'])}\n"
+                       f'🔗 <a href="{comms.panel_link("#script-" + job["id"])}">'
+                       f"Read the script</a>", html=True)
 
         comms.log(f"command: idea \"{topic[:40]}\" (panel)")
         _bg("panel: custom idea", _make_idea)
@@ -3317,6 +3447,20 @@ def report():
                 if len(tls) > 80:
                     for k in list(tls)[:-80]:
                         del tls[k]
+            # thumbnail A/B material: the script's chosen + alternate
+            # concepts, banked under the long-form's video id. The job
+            # that carried them ages out of the bounded queue within a
+            # day — the bank is what _thumb_check reads a week later.
+            th = data.get("thumbnail")
+            if th and long_url:
+                lvid = long_url.rstrip("/").split("/")[-1]
+                bank = state.STATE.setdefault("thumb_bank", {})
+                bank[lvid] = {"text": th.get("text", ""),
+                              "concept": th.get("concept", ""),
+                              "alternates": th.get("alternates", [])}
+                if len(bank) > 80:
+                    for k in list(bank)[:-80]:
+                        del bank[k]
             state.save_soon()
             # a ✅/❌ tapped on the preview before this report arrived
             early = state.STATE.setdefault("early_decisions", {}).pop(
@@ -3342,6 +3486,10 @@ def report():
     elif job and job["type"] == "upload" and ok:
         comms.send(f"📤 <b>Uploaded</b> — {comms.esc(data.get('title', 'video'))}\n"
                    f"{comms.esc(data.get('video_url', ''))}", html=True)
+    elif job and job["type"] == "thumb" and ok:
+        # thumbnail A/B: quiet confirmation — the swap itself was already
+        # announced when it was decided, this just closes the loop
+        comms.log(f"thumbnail set: {str(data.get('title', ''))[:60]}")
     elif not ok and job is None:
         # job aged out of the bounded list — nothing to update, but the
         # failure is still worth surfacing
@@ -3389,7 +3537,9 @@ def _publish_now(approval_id, note=""):
     state.save_soon()
     comms.send(f"🗓 <b>Scheduled</b> — {comms.esc(p['title'][:60])}\n"
                f"Goes public {when:%a %d %b, %H:%M} BD (the best hour by "
-               f"the numbers so far).\n{comms.esc(urls[0])}", html=True)
+               f"the numbers so far).\n{comms.esc(urls[0])}\n"
+               f'🔗 <a href="{comms.panel_link("#films")}">Its page in the '
+               f"panel</a>", html=True)
     _cross_post(approval_id, p)
     return True
 
@@ -4033,6 +4183,22 @@ def scheduler_loop():
             if now.weekday() in config.PUBLISH_WEEKDAYS:
                 once_per_day("planning", brain.analyze_and_plan, 8, 30)
             once_per_day("title check", brain.title_check, 12, 0)
+
+            def _quota_retry():
+                """13:30 Dhaka = 30 min after YouTube's quota window
+                resets: anything the quota guard deferred gets its slot
+                back now (capped at 2 — the fresh window fits 6 uploads
+                and the day's own planning still needs room)."""
+                n = int(state.STATE.get("quota_deferred") or 0)
+                if not n:
+                    return
+                if brain.quota_full():
+                    comms.log("quota retry skipped — window still full")
+                    return
+                state.STATE["quota_deferred"] = 0
+                state.save_soon()
+                brain.queue_next_video(min(n, 2))
+            once_per_day("quota retry", _quota_retry, 13, 30)
             if now.weekday() == 6:
                 once_per_day("weekly summary", brain.weekly_summary, 9, 0)
             every_hours("comment sweep", brain.comment_sweep, 4)

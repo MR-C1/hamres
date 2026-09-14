@@ -110,12 +110,16 @@ def update_branding(description=None, keywords=None):
     def once():
         yt = get_service()
         cur = yt.channels().list(
-            part="brandingSettings", mine=True).execute()
+            part="snippet,brandingSettings", mine=True).execute()
         items = cur.get("items", [])
         if not items:
             return False
         br = items[0].get("brandingSettings", {})
-        ch = br.setdefault("channel", {})
+        ch = dict(br.get("channel") or {})
+        # YouTube validates brandingSettings.channel.title against the
+        # channel's real title — a stale value is the classic
+        # "Precondition check failed"
+        ch["title"] = items[0]["snippet"]["title"]
         if description is not None:
             ch["description"] = description
         if keywords is not None:

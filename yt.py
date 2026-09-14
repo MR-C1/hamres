@@ -95,18 +95,22 @@ def channel_branding():
         if not items:
             return None
         c = items[0]
-        br = c.get("brandingSettings", {}).get("channel", {})
+        br = c.get("brandingSettings", {})
         return {"title": c["snippet"].get("title", ""),
                 "description": c["snippet"].get("description", ""),
-                "keywords": br.get("keywords", "")}
+                "keywords": br.get("channel", {}).get("keywords", ""),
+                # raw view for debugging refused writes
+                "raw_channel": br.get("channel", {})}
     return _with_retries(once)
 
 
 def update_branding(description=None, keywords=None):
-    """Write the channel's About text / search keywords. Read-modify-
-    write of the whole brandingSettings.channel object — channels.update
-    replaces the values the body carries, so sending the complete dict
-    back preserves every field we don't touch."""
+    """Write the channel's About text / search keywords. Sends the
+    MINIMAL channel object (title + the changed fields) — YouTube
+    rejects bodies carrying legacy branding fields it considers
+    read-only ("Precondition check failed"), and values the body omits
+    are left untouched. The title must match the real channel title
+    exactly, or the write is refused."""
     def once():
         yt = get_service()
         cur = yt.channels().list(
@@ -114,12 +118,7 @@ def update_branding(description=None, keywords=None):
         items = cur.get("items", [])
         if not items:
             return False
-        br = items[0].get("brandingSettings", {})
-        ch = dict(br.get("channel") or {})
-        # YouTube validates brandingSettings.channel.title against the
-        # channel's real title — a stale value is the classic
-        # "Precondition check failed"
-        ch["title"] = items[0]["snippet"]["title"]
+        ch = {"title": items[0]["snippet"]["title"]}
         if description is not None:
             ch["description"] = description
         if keywords is not None:

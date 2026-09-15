@@ -83,8 +83,8 @@ SCRIPT_PROMPT = """Write ONE video script for a faceless YouTube mind-tricks cha
 {{
   "id": "kebab-case-topic-slug",
   "format": ["short", "long"],
-  "title": "Mind Trick #{n}: <curiosity title — keep the whole title under 70 chars>",
-  "title_alternatives": ["exactly 2 alternatives, each keeping the same 'Mind Trick #{n}:' prefix"],
+  "title": "<curiosity title under 70 chars>",
+  "title_alternatives": ["exactly 2 alternatives, each under 70 chars"],
   "description": "Full YouTube description: 120-200 words. First 1-2 lines = a hook that sells the click (this text shows in search results). Then 2-3 short paragraphs of context that tease the trick WITHOUT spoiling the mechanism. End with an engaging question, then a line of 4-6 hashtags relevant to THIS topic (like #psychology #mindtricks #didyouknow).",
   "tags": ["8-14 specific tags: mix broad (psychology, mind tricks, human behavior) and topic-specific] ,
   "hook": "80-120 words. COLD-OPEN by putting the trick ON the viewer: make them count something, choose between options, watch a demonstration unfold on someone — they must PARTICIPATE before they understand. (If the topic truly can't involve the viewer, drop them into the single most striking moment instead.) No greeting, no channel intro, no context. End on the framing question the whole video answers.",
@@ -500,23 +500,21 @@ def _parse_script(text, min_scenes=8):
         return None
 
 
-# the series spine: "Mind Trick #7: …" — every numbered title is an ad for
-# every other episode. Matched case-insensitively against whatever variant
-# a provider wrote ("Mind Trick #7:", "Mindtrick 7 —") so the canonical
-# prefix can be stamped back on.
+# "Mind Trick #7: …" prefixes are RETIRED (owner's call — plain titles).
+# The regex stays because old titles and provider habits still produce the
+# variant; everything downstream strips it instead of stamping it.
 SERIES_PREFIX = re.compile(r"(?i)^mind\s*tricks?\s*#?(\d+)\s*[:.\-—–]?\s*")
 
 
-def _number_title(script, n):
-    """Force the script's title (and alternatives) onto the series spine.
-    The prompt asks for the prefix, but a squeezed provider drops it or
-    mangles the number often enough that the parse side enforces it:
-    strip whatever variant is there, stamp the canonical form with THIS
-    script's number (assigned at write time, advanced at queue time)."""
+def _number_title(script, n=None):
+    """Strip any 'Mind Trick #N:' series prefix off the title (and the
+    alternatives). Kept under the old name so every call site reads the
+    same; the number argument is ignored — numbering is gone."""
+    del n
 
     def fix(t):
-        t = SERIES_PREFIX.sub("", str(t or "").strip())
-        return f"Mind Trick #{n}: {t}"[:100].rstrip(" :-—–")
+        return SERIES_PREFIX.sub("", str(t or "").strip())[:100] \
+            .rstrip(" :-—–").strip()
 
     if script.get("title"):
         script["title"] = fix(script["title"])
@@ -530,8 +528,7 @@ def _write_script(direction=None, research=None, feedback=None):
     direction = (direction or state.STATE.get("topic_direction")
                  or MIND_TRICKS_SEED)
     used = ", ".join(state.STATE.get("used_topics", [])[-40:]) or "none yet"
-    n = int(state.STATE.get("series_n") or 1)
-    prompt = SCRIPT_PROMPT.format(direction=direction, used=used, n=n)
+    prompt = SCRIPT_PROMPT.format(direction=direction, used=used)
     if feedback:
         # the previous draft failed a quality gate — name the problems so
         # the rewrite fixes them instead of re-rolling the same weaknesses
@@ -554,7 +551,7 @@ def _write_script(direction=None, research=None, feedback=None):
         return None          # the whole chain is silent — no nudge will help
     script = _parse_script(text)
     if script:
-        return _number_title(script, n)
+        return _number_title(script)
 
     # a stub script (the usual parse failure) gets ONE corrective retry
     # that names the shortfall — a blind re-roll rolls the same dice on
@@ -567,7 +564,7 @@ def _write_script(direction=None, research=None, feedback=None):
                             "or an outline. Never cut the scene list short."),
                   gemini_models=SCRIPT_GEMINI_MODELS)
     script = _parse_script(text)
-    return _number_title(script, n) if script else None
+    return _number_title(script) if script else None
 
 
 # YouTube's API budget: 10,000 units/day, every videos.insert costs 1,600,
@@ -609,17 +606,16 @@ def quota_full():
 
 
 def queue_script(script, approval_id=None):
-    """Queue a finished script for rendering and advance the series spine.
-    Every queue path — the scheduler's top-up, the panel, Telegram's /idea,
-    the answer-Shorts — goes through here, so the episode numbers can never
-    fork between entry points."""
+    """Queue a finished script for rendering. Every queue path — the
+    scheduler's top-up, the panel, Telegram's /idea, the answer-Shorts —
+    goes through here, so the bookkeeping below can never be skipped by
+    one of them."""
     payload = {"script": script}
     if approval_id:
         payload["approval_id"] = approval_id
     job = jobs.add_job("render", payload)
     cloud.wake_soon("render")  # cloud runner starts within seconds
     state.STATE.setdefault("used_topics", []).append(script.get("id", "?"))
-    state.STATE["series_n"] = int(state.STATE.get("series_n") or 1) + 1
     state.save_soon()
     return job
 
@@ -1370,7 +1366,7 @@ SHORT_ANSWER_PROMPT = """Write ONE YouTube Short script (45-60 seconds) answerin
 {{
   "id": "kebab-case-slug",
   "format": ["short"],
-  "title": "Mind Trick #{n}: <curiosity title under 60 chars>",
+  "title": "<curiosity title under 60 chars>",
   "description": "60-100 words: hook first line, 2-3 sentences of context, one engaging question, then 3-4 hashtags.",
   "tags": ["6-10 tags mixing psychology with the topic"],
   "hook": "20-30 words. Cold open ON the viewer — they DO the trick in the first 5 seconds. No greeting.",
@@ -1405,10 +1401,9 @@ def _write_short(topic):
     fact gates only (retention structure matters less at 45 seconds), and
     a 4-scene floor instead of 8. Returns the script or None."""
     used = ", ".join(state.STATE.get("used_topics", [])[-40:]) or "none yet"
-    n = int(state.STATE.get("series_n") or 1)
     research = _research(f"Answer this viewer request with one concrete "
                          f"mind trick or brain glitch: {topic}", used)
-    prompt = SHORT_ANSWER_PROMPT.format(topic=topic[:200], used=used, n=n)
+    prompt = SHORT_ANSWER_PROMPT.format(topic=topic[:200], used=used)
     if research and research.get("sources"):
         prompt += ("\n\nGROUNDED RESEARCH (write from these facts; cite "
                    "them in 'source'):\n"
@@ -1425,7 +1420,7 @@ def _write_short(topic):
                    "summary or outline.")
     if not script:
         return None
-    script = _number_title(script, n)
+    script = _number_title(script)
     script["format"] = ["short"]      # the worker renders ONLY the Short
     hook, hook_reason = _score_hook(script)
     facts_ok, problems = _fact_check(script, research)
@@ -1510,19 +1505,17 @@ def title_check():
             f"This video is underperforming. Current title: "
             f'"{v["title"]}" ({v["views"]} views).\n'
             f"Give me ONE better title — curiosity-gap, under 70 chars, "
-            f"honest (no clickbait lies). If the title starts with a "
-            f"'Mind Trick #N:' series prefix, keep that exact prefix. "
-            f"Respond with the title only.")
+            f"honest (no clickbait lies). Respond with the title only.")
         if not alt:
             continue
         alt = alt.strip().strip('"').split("\n")[0][:100]
         if alt.strip().lower() == v["title"].strip().lower():
             continue  # nothing to apply
-        # the spine survives swaps: if the rewrite dropped or mangled the
-        # episode number, stamp the original prefix back on
-        m = SERIES_PREFIX.match(v["title"])
-        if m and not SERIES_PREFIX.match(alt):
-            alt = f"Mind Trick #{m.group(1)}: {alt}"[:100]
+        # numbered "Mind Trick #N:" prefixes are retired — strip one from
+        # the rewrite (and from an already-prefixed title) either way
+        alt = _number_title({"title": alt, "title_alternatives": []})["title"]
+        if not alt:
+            continue
         try:
             yt.update_title(v["id"], alt)
         except Exception as e:
@@ -1605,6 +1598,36 @@ def _swap_verdicts(report):
 # thumbnail A/B — the second experiment surface
 # ---------------------------------------------------------------------------
 
+def queue_thumb_test(video, alt, ctr=None):
+    """Queue ONE thumbnail swap for a video with a banked alternate — the
+    shared engine of the automatic _thumb_check and the panel's manual
+    A/B control. Writes the thumb_swaps ledger entry (pre-swap CTR/views,
+    the original concept for a revert) so _thumb_verdicts judges it a
+    week later. One swap per video ever; a second attempt returns False."""
+    bank = state.STATE.setdefault("thumb_bank", {})
+    swaps = state.STATE.setdefault("thumb_swaps", {})
+    vid = video["id"]
+    if vid in swaps:
+        return False
+    entry = bank.get(vid) or {}
+    jobs.add_job("thumb", {
+        "video_url": f"https://youtu.be/{vid}",
+        "title": video.get("title", ""),
+        "thumbnail": alt})
+    cloud.wake_soon("render")
+    swaps[vid] = {
+        "from": entry.get("text", ""), "to": alt.get("text", ""),
+        "concept": alt.get("concept", ""),
+        "when": datetime.now().strftime("%Y-%m-%d"),
+        "pre_ctr": (round(ctr, 4) if ctr is not None else None),
+        "pre_views": video.get("views", 0), "verdict": None,
+        "video_url": f"https://youtu.be/{vid}",
+        "orig": {"text": entry.get("text", ""),
+                 "concept": entry.get("concept", "")}}
+    state.save_soon()
+    return True
+
+
 def _thumb_check(videos, report):
     """A weak thumbnail on a 7-day-old video is a free swap: the runner
     renders the banked alternate concept and set_thumbnail replaces the
@@ -1638,21 +1661,8 @@ def _thumb_check(videos, report):
         if not alts:
             continue
         new = alts[0]   # ranked by score at concept time
-        jobs.add_job("thumb", {
-            "video_url": f"https://youtu.be/{v['id']}",
-            "title": v["title"],
-            "thumbnail": new})
-        cloud.wake_soon("render")
-        swaps[v["id"]] = {
-            "from": entry.get("text", ""), "to": new.get("text", ""),
-            "concept": new.get("concept", ""),
-            "when": datetime.now().strftime("%Y-%m-%d"),
-            "pre_ctr": (round(ctr, 4) if ctr is not None else None),
-            "pre_views": v["views"], "verdict": None,
-            "video_url": f"https://youtu.be/{v['id']}",
-            "orig": {"text": entry.get("text", ""),
-                     "concept": entry.get("concept", "")}}
-        state.save_soon()
+        if not queue_thumb_test(v, new, ctr):
+            continue
         comms.send(
             f"🖼 <b>Thumbnail auto-swapped</b> (underperformer)\n"
             f"{comms.esc(v['title'][:60])}\n"

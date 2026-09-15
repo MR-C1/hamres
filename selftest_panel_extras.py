@@ -409,6 +409,54 @@ def main():
     check("a render that uploaded stays done", by.get("d2"), "done")
     check("non-render jobs are never requeued", by.get("c1"), "done")
 
+    # ---- manual thumbnail A/B: the panel button shares the auto engine ----
+    appmod.state.STATE["thumb_bank"] = {
+        "tt1": {"text": "CUR", "concept": "cur concept",
+                "alternates": [{"text": "ALT1", "concept": "c1"},
+                               {"text": "ALT2", "concept": "c2"}]},
+        "tt2": {"text": "DONE", "concept": "d",
+                "alternates": [{"text": "ALT3", "concept": "c3"}]}}
+    appmod.state.STATE["thumb_swaps"] = {
+        "tt2": {"from": "DONE", "to": "ALT3", "when": "2026-09-01",
+                "verdict": None}}
+    r = c.get("/api/state")
+    d = r.get_json()
+    check("thumb_tests lists only untried videos with alternates",
+          [t["vid"] for t in d["thumb_tests"]] == ["tt1"]
+          and d["thumb_tests"][0]["alts"][0]["text"] == "ALT1", True)
+
+    appmod._channel_cache.update(t=time.time(), data={
+        "ch": {"title": "T", "subs": 1, "views": 2, "videos": 2},
+        "vids": [{"id": "tt1", "title": "Thumb Test Film",
+                  "privacy": "public", "published": "2026-09-01",
+                  "views": 50, "likes": 0, "comments": 0, "duration_s": 400,
+                  "thumb": "https://i.ytimg.com/vi/tt1/mqdefault.jpg"}]})
+    appmod._analytics_cache.update(t=time.time(), data={
+        "reason": "ok",
+        "rows": [{"id": "tt1", "title": "Thumb Test Film",
+                  "views": 50, "ctr": 3.3}],
+        "formats": {}, "avg_pct": 0, "minutes": 0, "note": "", "when": ""})
+    r = c.post("/api/action", json={"action": "thumb_test:tt1:1"})
+    check("thumb_test queues the chosen alternate",
+          (r.status_code, r.get_json().get("ok")), (200, True))
+    tj = [j for j in appmod.state.STATE["jobs"] if j["type"] == "thumb"]
+    check("the thumb job carries the ALT2 concept",
+          len(tj) == 1 and tj[0]["thumbnail"]["text"] == "ALT2", True)
+    sw = appmod.state.STATE["thumb_swaps"]["tt1"]
+    check("the ledger records the manual baseline (CTR as a fraction)",
+          sw["to"] == "ALT2" and sw["pre_ctr"] == 0.033
+          and sw["orig"] == {"text": "CUR", "concept": "cur concept"}, True)
+    r = c.post("/api/action", json={"action": "thumb_test:tt1:0"})
+    check("a second swap attempt is refused (one per video)",
+          (r.status_code, "one" in r.get_json().get("error", "")),
+          (409, True))
+    r = c.post("/api/action", json={"action": "thumb_test:tt1:9"})
+    check("an out-of-range alternate is a 400", r.status_code, 400)
+    # after the swap, the video leaves the ready-to-test list
+    r = c.get("/api/state")
+    check("swapped videos drop out of thumb_tests",
+          [t["vid"] for t in r.get_json()["thumb_tests"]], [])
+
     del sys.modules["yt_analytics"]
     print()
     if FAILS:

@@ -183,6 +183,10 @@ def my_videos(max_results=30):
                 # scene-aware retention without re-rendering anything
                 "description": (item.get("snippet", {})
                                 .get("description") or "")[:1500],
+                # the panel's Films tab shows the real thumbnail; the
+                # default sizes are always present on an uploaded video
+                "thumb": ((item.get("snippet", {}).get("thumbnails") or {})
+                          .get("medium", {}).get("url", "")),
             })
         return out
     return _with_retries(once)

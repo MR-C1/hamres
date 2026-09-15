@@ -786,13 +786,17 @@ body[data-role="visitor"] .field input{pointer-events:none;background:var(--wash
 
   <!-- The channel's own experiments: auto title swaps and thumbnail swaps,
        each with its verdict once a week of data has passed. -->
-  <div class="sec" id="sec-ab" hidden><h2>A/B experiments</h2><span class="note">Titles and thumbnails the agent swapped on underperformers, and what a week of data said.</span></div>
+  <div class="sec" id="sec-ab" hidden><h2>A/B experiments</h2><span class="note">Titles and thumbnails swapped on underperformers — by the agent or by you — and what a week of data said.</span></div>
   <div class="card" id="abcard" style="padding:4px 18px" hidden>
     <div class="tblwrap"><table class="rtable" aria-label="A/B experiment verdicts">
       <thead><tr><th>What</th><th>From → To</th><th>When</th><th>Verdict</th></tr></thead>
       <tbody id="abrows"></tbody>
     </table></div>
   </div>
+  <!-- Manual thumbnail A/B: videos whose render banked alternate concepts
+       that haven't been tried yet. The owner picks one; the same ledger
+       and the same 7-day verdict machinery as the automatic swaps. -->
+  <div class="card" id="abready" style="padding:14px 18px" hidden></div>
 
   <div class="sec"><h2>Render queue</h2><span class="note" id="queuenote"></span></div>
   <div class="card" style="padding:4px 18px">
@@ -851,6 +855,7 @@ body[data-role="visitor"] .field input{pointer-events:none;background:var(--wash
   <div class="card" style="padding:4px 18px">
     <div class="tblwrap"><table class="rtable" aria-label="Channel videos">
       <thead><tr>
+        <th scope="col">Thumb</th>
         <th class="sortable" data-k="title" scope="col"><button type="button">Title</button></th>
         <th class="sortable" data-k="privacy" scope="col"><button type="button">Status</button></th>
         <th class="sortable" data-k="duration" scope="col"><button type="button">Format</button></th>
@@ -1166,14 +1171,15 @@ const NICE = {next:"New video queued", idea:"Script queued", chat:"Asked the man
   clear_out:"Answers cleared", reply:"Reply posting", skipreply:"Reply dropped",
   title:"Renaming", keeptitle:"Title kept", report:"Report on its way",
   plan:"Planning", titlecheck:"Checking titles", comments:"Reading comments",
-  diag:"Testing the providers", branding:"Channel identity saved"};
+  diag:"Testing the providers", branding:"Channel identity saved",
+  thumb_test:"Thumbnail A/B started"};
 const BUSY = {next:"Queueing…", idea:"Writing…", chat:"Asking…", publish:"Publishing…",
   reject:"Deleting…", retry:"Requeueing…", pause:"Pausing…", resume:"Resuming…",
   clear_failed:"Clearing…", clear_all:"Clearing…", clear_out:"Clearing…",
   reset:"Resetting…", toggle_auto:"Switching…", refresh_channel:"Refreshing…",
   wake:"Waking…", direction:"Saving…", report:"Writing…", plan:"Planning…",
   titlecheck:"Checking…", comments:"Reading…", diag:"Testing…",
-  branding:"Saving…"};
+  branding:"Saving…", thumb_test:"Swapping…"};
 const HEAD = a => String(a).split(":")[0];
 
 function busyOn(btn, label){
@@ -1671,7 +1677,10 @@ function render(){
   /* sort on every render, so the order always matches what the controls claim */
   $("vids").innerHTML = shown.slice().sort(cmpVid).map(v => {
     const a = retById[v.id], long = (v.duration_s || 0) >= 180;
-    return '<tr><td class="lead"><a class="ttl" href="https://youtu.be/'+esc(v.id)+'" target="_blank" rel="noopener">'+esc(v.title)+'</a></td>'+
+    return '<tr><td style="width:100px">'+(v.thumb
+      ? '<img src="'+esc(v.thumb)+'" alt="" loading="lazy" style="width:90px;display:block;border-radius:4px">'
+      : '<span style="color:var(--muted)">—</span>')+'</td>'+
+    '<td class="lead"><a class="ttl" href="https://youtu.be/'+esc(v.id)+'" target="_blank" rel="noopener">'+esc(v.title)+'</a></td>'+
     '<td><span class="cl">Status</span><span class="chip '+(v.privacy==="public"?"pub":"priv")+'"><span class="dot"></span>'+esc(v.privacy)+'</span></td>'+
     '<td><span class="cl">Format</span><span class="chip'+(long?' fmt-long':'')+'"><span class="dot"></span>'+(long?'Long':'Short')+'</span></td>'+
     '<td class="num"><span class="cl">Views</span><b>'+fmt(v.views)+'</b></td>'+
@@ -1682,7 +1691,7 @@ function render(){
     '<td class="act">'+(v.privacy !== "public"
       ? '<button class="linkbtn" data-act="vpub:'+esc(v.id)+'">Make public</button>'
       : '<button class="linkbtn" data-act="vpriv:'+esc(v.id)+'">Make private</button>')+'</td></tr>';
-  }).join("") || '<tr><td colspan="9" class="empty">'+
+  }).join("") || '<tr><td colspan="10" class="empty">'+
     (q ? "Nothing titled like “"+esc(FILM_Q)+"”." : "No films yet — the first one appears here once a render finishes.")+'</td></tr>';
   headIf("vids");
 
@@ -1783,7 +1792,9 @@ function render(){
      ones say when their week of data is up; decided ones carry the verdict
      (a clear thumbnail loss says it reverted itself). */
   const swaps = d.swaps || [];
-  $("sec-ab").hidden = $("abcard").hidden = !swaps.length;
+  /* the manual side: banked thumbnail alternates not tried yet */
+  const tests = d.thumb_tests || [];
+  $("sec-ab").hidden = $("abcard").hidden = !swaps.length && !tests.length;
   $("abrows").innerHTML = swaps.map(s =>
     "<tr><td>" + esc(s.kind) + "</td>" +
     '<td><a class="ttl" href="https://youtu.be/' + esc(s.vid) +
@@ -1793,6 +1804,20 @@ function render(){
     "<td>" + (s.verdict ? esc(s.verdict)
               : '<span class="note">a week of data, then the verdict</span>') +
     "</td></tr>").join("");
+  $("abready").hidden = !tests.length;
+  if (tests.length) {
+    $("abready").innerHTML =
+      '<div style="font-size:13.5px;color:var(--muted);margin-bottom:10px">Alternate thumbnails ready to test — one swap per video, a week of data gives the verdict, a clear loss reverts itself:</div>'
+      + tests.map(t => {
+        const v = (d.videos || []).find(x => x.id === t.vid);
+        return '<div class="rowline" style="align-items:center">'
+          + (v && v.thumb ? '<img src="'+esc(v.thumb)+'" alt="" loading="lazy" style="width:64px;border-radius:3px;flex:0 0 auto">' : '')
+          + '<a class="ttl" style="min-width:0" href="https://youtu.be/'+esc(t.vid)+'" target="_blank" rel="noopener">'+esc(v ? v.title : t.vid)+'</a>'
+          + '<span class="grow"></span>'
+          + t.alts.map((a2,i) => '<button class="btn btn-sm" style="margin-left:6px" title="'+esc(a2.concept)+'" data-act="thumb_test:'+esc(t.vid)+':'+i+'">Try “'+esc(a2.text)+'”</button>').join("")
+          + '</div>';
+      }).join("");
+  }
   $("topics").innerHTML = d.used_topics.length
     ? d.used_topics.map(t => '<span class="chip">'+esc(t)+
         '<button class="x" data-act="forget:'+esc(t)+'" title="Allow this topic again" aria-label="Allow '+esc(t)+' again">×</button></span>').join("")
@@ -2901,6 +2926,19 @@ def api_state():
                 "verdict": s.get("verdict")}
                for vid, s in state.STATE.get("thumb_swaps", {}).items()],
             key=lambda s: str(s.get("when")), reverse=True)[:20],
+        # manual thumbnail A/B: banked alternates that haven't been tried
+        # (one swap per video ever — anything already in thumb_swaps is
+        # out of the running until its verdict says revert)
+        "thumb_tests": [
+            {"vid": vid,
+             "current": (b.get("text") or "")[:60],
+             "alts": [{"text": (x.get("text") or "")[:60],
+                       "concept": (x.get("concept") or "")[:120]}
+                      for x in (b.get("alternates") or [])
+                      if x.get("text")][:2]}
+            for vid, b in state.STATE.get("thumb_bank", {}).items()
+            if (b.get("alternates") or [])
+            and vid not in state.STATE.get("thumb_swaps", {})][:10],
         "used_topics": state.STATE.get("used_topics", [])[-25:],
         "best_hour": state.STATE.get("best_hour", 17),
         # scene-aware retention: one compact finding per mapped film
@@ -3035,6 +3073,47 @@ def api_action():
         except Exception as e:
             return jsonify({"ok": False,
                             "error": str(e)[:200]}), 500
+    if a.startswith("thumb_test:"):
+        # manual thumbnail A/B: the owner picks one of the banked alternate
+        # concepts; brain.queue_thumb_test queues the same thumb job and
+        # ledger entry the automatic check uses, so the 7-day verdict (and
+        # the auto-revert on a clear loss) covers this path too
+        _, vid, idx_s = a.split(":", 2)
+        bank = (state.STATE.get("thumb_bank") or {}).get(vid) or {}
+        alts = [x for x in (bank.get("alternates") or []) if x.get("text")]
+        try:
+            alt = alts[int(idx_s)]
+        except (ValueError, IndexError):
+            return jsonify({"ok": False, "error": "no such alternate"}), 400
+        vids = _channel_snapshot()["vids"]
+        video = next((v for v in vids if v.get("id") == vid), None)
+        if not video:
+            return jsonify({"ok": False, "error": "video not found"}), 404
+        # the A/B baseline: this video's CTR from the cached analytics
+        # snapshot (rows carry it as a percent)
+        ctr = None
+        try:
+            row = next((r for r in (_analytics_snapshot(vids).get("rows")
+                                    or []) if r.get("id") == vid), None)
+            if row and row.get("ctr") is not None:
+                ctr = round(float(row["ctr"]) / 100.0, 4)
+        except Exception:
+            pass
+        if not brain.queue_thumb_test(video, alt, ctr):
+            return jsonify({"ok": False,
+                            "error": "this video already had its one "
+                                     "thumbnail swap"}), 409
+        comms.log("panel: manual thumbnail A/B on "
+                  + (video.get("title") or "")[:50])
+        comms.send(f"🖼 <b>Thumbnail A/B started</b> (your call) — "
+                   f"{comms.esc((video.get('title') or '')[:60])}\n"
+                   f"'{comms.esc(bank.get('text', ''))}' → "
+                   f"'{comms.esc(alt.get('text', ''))}'\n"
+                   f"A week of data gives the verdict; a clear loss "
+                   f"reverts itself.", html=True)
+        return jsonify({"ok": True, "started": True,
+                        "msg": "Thumbnail swap queued — the runner "
+                               "applies it."})
     if a == "next":
         comms.log("command: queue a video (panel)")
         comms.send("Writing a script… (from panel)")

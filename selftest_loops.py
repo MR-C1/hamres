@@ -352,14 +352,13 @@ def main():
           and not entry2.get("answered"))
     brain.quota_full = orig_qf
 
-    # _write_short: 4 scenes parse, short-only, numbered, QA attached
+    # _write_short: 4 scenes parse, short-only, prefix-free, QA attached
     orig_research, orig_hook = brain._research, brain._score_hook
     orig_fact, orig_pick = brain._fact_check, brain._pick_thumbnail
     brain._research = lambda d, u: None
     brain._score_hook = lambda s: (80, "fine")
     brain._fact_check = lambda s, r: (True, [])
     brain._pick_thumbnail = lambda s: None
-    st.STATE["series_n"] = 5
     short_json = ('{"id": "mirror-touch", "title": "mind trick #5: You Feel '
                   'What You See", "format": ["short"], "hook": "Touch your '
                   'own cheek. Now watch my hand.", "scenes": ['
@@ -374,9 +373,9 @@ def main():
     sc = brain._write_short("mirror touch illusion")
     check("write-short: 4 scenes parse with the short floor",
           sc is not None and len(sc["scenes"]) == 4)
-    check("write-short: short-only format + numbered spine",
+    check("write-short: short-only format, series prefix stripped",
           sc["format"] == ["short"]
-          and sc["title"] == "Mind Trick #5: You Feel What You See")
+          and sc["title"] == "You Feel What You See")
     check("write-short: hook + fact gates ran, retention skipped",
           sc["_qa"]["hook"] == 80 and sc["_qa"]["facts"] == []
           and sc["_qa"]["retention"] is None)
@@ -452,6 +451,24 @@ def main():
     added.clear()
     brain._thumb_check(vids, ctr_report)
     check("thumb: one swap per video ever", not added)
+
+    # the manual path (the panel's A/B button) shares the same engine:
+    # one job, same ledger shape, and a second attempt is refused
+    added.clear()
+    ok = brain.queue_thumb_test(
+        {"id": "t7", "title": "Manual Pick", "views": 42},
+        {"text": "PICKED", "concept": "picked concept"}, ctr=0.033)
+    check("thumb manual: queues exactly one job with the chosen concept",
+          ok and len(added) == 1 and added[0][0] == "thumb"
+          and added[0][1]["thumbnail"]["text"] == "PICKED")
+    sw7 = st.STATE["thumb_swaps"]["t7"]
+    check("thumb manual: same ledger shape with the CTR baseline",
+          sw7["to"] == "PICKED" and sw7["pre_ctr"] == 0.033
+          and sw7["pre_views"] == 42 and sw7["verdict"] is None)
+    check("thumb manual: one swap per video ever here too",
+          brain.queue_thumb_test(
+              {"id": "t7", "title": "Manual Pick", "views": 42},
+              {"text": "OTHER", "concept": "x"}) is False)
 
     # verdicts: a clear CTR loss reverts via a second thumb job
     sw["when"] = "2026-09-01"

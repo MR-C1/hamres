@@ -3480,18 +3480,20 @@ def api_action():
                     _panel_out("probe", "no GEMINI_API_KEYS configured")
                     return
                 client = genai.Client(api_key=keys[0])
+                names = []
                 try:
                     names = [m.name for m in client.models.list()]
-                    flash = [n for n in names if "flash" in n.lower()]
-                    lines.append("LISTED flash models: "
-                                 + ", ".join(flash[:25]))
                 except Exception as e:
                     lines.append("models.list failed: " + str(e)[:140])
-                cands = ["gemini-3-flash", "gemini-3.1-flash-lite",
-                         "gemini-3-flash-lite", "gemini-flash-latest",
-                         "gemini-flash-lite-latest", "gemini-2.0-flash",
-                         "gemini-2.5-flash", "gemini-3.0-flash"]
-                for m in cands:
+                # listed != usable (2.5-flash lists but 404s on generate),
+                # so test-generate every listed TEXT flash model
+                skip = ("image", "tts", "audio", "live", "embed", "vision")
+                cands = [n.replace("models/", "") for n in names
+                         if "flash" in n.lower()
+                         and not any(k in n.lower() for k in skip)]
+                cands = cands or ["gemini-3.5-flash", "gemini-3.8-flash"]
+                lines.append("testing " + str(len(cands)) + " flash models")
+                for m in cands[:24]:
                     try:
                         r = client.models.generate_content(
                             model=m, contents="say ok",

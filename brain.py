@@ -527,11 +527,45 @@ def _number_title(script, n=None):
     return script
 
 
+def _craft_lessons(n=10):
+    """Self-improvement: the QA gate flags the SAME craft weaknesses
+    (essay tone, flat transitions, weak hooks) script after script, but
+    that feedback only lived inside one best-of-3 loop. Read the recent
+    SCORED reasons and hand the recurring low-score ones back as STANDING
+    guidance, so every new script preemptively fixes the mistakes this
+    channel actually makes — the bot learns from itself. Fail-safe: no
+    usable history -> empty string (prompt unchanged)."""
+    reasons = []
+    for key in ("hook_scores", "retention_scores"):
+        for r in state.STATE.get(key, [])[-n:]:
+            txt = str(r.get("reason", "")).strip()
+            try:
+                low = int(r.get("score", 100)) < 80
+            except (TypeError, ValueError):
+                low = False
+            if txt and low and "unscorable" not in txt.lower():
+                reasons.append(txt)
+    if not reasons:
+        return ""
+    seen, distinct = set(), []
+    for t in reversed(reasons):          # most recent weaknesses first
+        k = t.lower()[:40]
+        if k not in seen:
+            seen.add(k)
+            distinct.append(t)
+        if len(distinct) >= 5:
+            break
+    return ("\n\nRECURRING WEAKNESSES the QA gate keeps flagging on this "
+            "channel's scripts — fix every one preemptively so it does NOT "
+            "happen again:\n- " + "\n- ".join(distinct))
+
+
 def _write_script(direction=None, research=None, feedback=None):
     direction = (direction or state.STATE.get("topic_direction")
                  or MIND_TRICKS_SEED)
     used = ", ".join(state.STATE.get("used_topics", [])[-40:]) or "none yet"
     prompt = SCRIPT_PROMPT.format(direction=direction, used=used)
+    prompt += _craft_lessons()   # standing self-learning from past QA flags
     if feedback:
         # the previous draft failed a quality gate — name the problems so
         # the rewrite fixes them instead of re-rolling the same weaknesses

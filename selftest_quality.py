@@ -350,6 +350,23 @@ def main():
               out_png.exists() and out_png.stat().st_size > 5000, True)
         out_png.unlink()
 
+    # ---- 11. self-learning: _craft_lessons feeds recurring QA weaknesses
+    # back into every new script so the bot fixes its own chronic mistakes
+    brain = fresh()
+    brain.state.STATE["hook_scores"] = [
+        {"id": "a", "score": 45, "reason": "First sentence is throat-clearing"},
+        {"id": "b", "score": 90, "reason": "great specific hook"},
+        {"id": "c", "score": 50, "reason": "unscorable — scorer unavailable"}]
+    brain.state.STATE["retention_scores"] = [
+        {"id": "a", "score": 42, "reason": "Academic essay tone, flat transitions"}]
+    les = brain._craft_lessons()
+    check("craft lessons name the recurring low-score weaknesses",
+          "throat-clearing" in les and "essay tone" in les)
+    check("craft lessons skip high scores and unscorable noise",
+          "great specific hook" not in les and "unscorable" not in les)
+    check("no scoring history -> empty lessons (prompt unchanged)",
+          fresh()._craft_lessons() == "")
+
     print()
     if FAILS:
         print(f"{len(FAILS)} FAILED: {', '.join(FAILS)}")

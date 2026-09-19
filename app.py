@@ -751,7 +751,8 @@ body[data-role="visitor"] .field input{pointer-events:none;background:var(--wash
   <div class="duo">
     <div class="card">
       <h3 style="font:600 17px/1.2 var(--serif)">Hook virality</h3>
-      <div class="note" style="font-size:12.5px;color:var(--muted);margin-bottom:6px">Scores from the script gate, recent first.</div>
+      <div class="note" style="font-size:12.5px;color:var(--muted);margin-bottom:6px">Hook &amp; retention scores from the QA gate, recent first.</div>
+      <div id="qualsum" style="font:600 14px/1.4 var(--serif);margin-bottom:8px"></div>
       <div id="hooks"></div>
     </div>
     <div class="card">
@@ -1596,6 +1597,13 @@ function render(){
       '<span class="scorebar" role="img" aria-label="score '+h.score+' of 100"><i style="width:'+h.score+'%;background:'+col+'"></i></span>'+
       '<span class="grow" style="font-size:14px;color:var(--muted)">'+esc(h.reason||h.id)+'</span></div>';
   }).join("") || '<div class="empty">No scores yet — they arrive with each script.</div>';
+
+  /* quality summary — the model + self-learning fixes should push these up */
+  const qavg = a => a.length ? Math.round(a.reduce((s,x)=>s+(x.score||0),0)/a.length) : null;
+  const ah = qavg((d.hooks||[]).slice(-10)), ar = qavg((d.retention_qa||[]).slice(-10));
+  $("qualsum").innerHTML = (ah==null && ar==null)
+    ? '<span style="color:var(--muted)">No scores yet.</span>'
+    : 'avg hook <b style="color:'+hookColor(ah||0)+'">'+(ah==null?'—':ah)+'</b> · avg retention <b style="color:'+hookColor(ar||0)+'">'+(ar==null?'—':ar)+'</b> <span style="color:var(--muted);font-weight:400">(last 10)</span>';
 
   /* trust meter */
   const n = Math.min(10, Math.max(0, d.settings.approved));
@@ -2912,6 +2920,7 @@ def api_state():
         "videos": vids,
         "history": hist[-30:],
         "hooks": state.STATE.get("hook_scores", [])[-30:],
+        "retention_qa": state.STATE.get("retention_scores", [])[-30:],
         "queue": {"pending": sum(1 for j in jobs_list if j["status"] == "pending"),
                   "claimed": sum(1 for j in jobs_list if j["status"] == "claimed"),
                   "failed": sum(1 for j in jobs_list if j["status"] == "failed"),

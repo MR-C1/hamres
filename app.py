@@ -821,6 +821,7 @@ body[data-role="visitor"] .field input{pointer-events:none;background:var(--wash
     <div class="actions" style="margin-top:12px">
       <button class="btn btn-sm" data-act="wake">Wake the renderer</button>
       <button class="btn btn-sm" data-act="refresh_channel">Refresh channel data</button>
+      <button class="btn btn-sm" data-act="crosspost_now">Cross-post one now</button>
     </div>
   </div>
 
@@ -1166,7 +1167,7 @@ const NICE = {next:"New video queued", idea:"Script queued", chat:"Asked the man
   vpriv:"Video is private", retitle:"Title updated", retry:"Jobs requeued",
   pause:"Paused", resume:"Resumed", clear_failed:"Failed jobs cleared",
   clear_all:"Everything cleared", reset:"Counter reset",
-  toggle_auto:"Auto-approve switched", refresh_channel:"Channel data refreshed",
+  toggle_auto:"Auto-approve switched", refresh_channel:"Channel data refreshed", crosspost_now:"Posting to Instagram/TikTok",
   wake:"Renderer woken", direction:"Guidance saved", set_hour:"Publish hour saved",
   set_after:"Threshold saved", killjob:"Job cancelled", forget:"Topic freed up",
   clear_out:"Answers cleared", reply:"Reply posting", skipreply:"Reply dropped",
@@ -1177,7 +1178,7 @@ const NICE = {next:"New video queued", idea:"Script queued", chat:"Asked the man
 const BUSY = {next:"Queueing…", idea:"Writing…", chat:"Asking…", publish:"Publishing…",
   reject:"Deleting…", retry:"Requeueing…", pause:"Pausing…", resume:"Resuming…",
   clear_failed:"Clearing…", clear_all:"Clearing…", clear_out:"Clearing…",
-  reset:"Resetting…", toggle_auto:"Switching…", refresh_channel:"Refreshing…",
+  reset:"Resetting…", toggle_auto:"Switching…", refresh_channel:"Refreshing…", crosspost_now:"Posting…",
   wake:"Waking…", direction:"Saving…", report:"Writing…", plan:"Planning…",
   titlecheck:"Checking…", comments:"Reading…", diag:"Testing…",
   branding:"Saving…", thumb_test:"Swapping…"};
@@ -3444,6 +3445,27 @@ def api_action():
         cloud.wake_soon("render")
         comms.log("render worker woken by hand (panel)")
         return jsonify({"ok": True})
+    if a == "crosspost_now":
+        # post ONE queued Short right now instead of waiting for the daily
+        # slot — lets the owner verify Instagram/TikTok on demand
+        import ig
+        import tiktok
+        if not (ig.configured() or tiktok.configured()):
+            return jsonify({"ok": False, "msg": "Cross-post is off — set the "
+                            "Instagram/TikTok tokens on Render first."})
+        if not (state.STATE.get("crosspost_queue") or []):
+            return jsonify({"ok": False, "msg": "Nothing queued yet — approve "
+                            "a video (✅) to fill the drip queue."})
+
+        def _drip_now():
+            try:
+                _crosspost_drip()
+            except Exception as e:
+                comms.send("⚠️ Cross-post test failed: "
+                           + comms.esc(str(e)[:200]), html=True)
+        threading.Thread(target=_drip_now, daemon=True).start()
+        return jsonify({"ok": True,
+                        "msg": "Posting one now — watch Telegram."})
     if a.startswith("killjob:"):
         jid = a.split(":", 1)[1]
         state.reload_jobs()

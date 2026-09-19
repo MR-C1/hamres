@@ -450,6 +450,23 @@ def main():
     check("publish: missing staged asset is explained, not silent",
           any("Cross-post" in m and "nothing staged" in m for m in sent))
 
+    # manual "cross-post now" admin action (on-demand verification)
+    fake_ig.configured = lambda: True
+    fake_tk.configured = lambda: True
+    st.STATE["crosspost_queue"] = []
+    j = client.post("/api/action",
+                    json={"action": "crosspost_now"}).get_json()
+    check("crosspost_now: empty queue -> ok False with a nudge",
+          bool(j) and j.get("ok") is False
+          and "queue" in (j.get("msg", "").lower()))
+    fake_ig.configured = lambda: False
+    fake_tk.configured = lambda: False
+    j = client.post("/api/action",
+                    json={"action": "crosspost_now"}).get_json()
+    check("crosspost_now: nothing configured -> ok False, says off",
+          bool(j) and j.get("ok") is False
+          and "off" in (j.get("msg", "").lower()))
+
     print()
     if FAILS:
         print(f"{len(FAILS)} FAILED: {', '.join(FAILS)}")

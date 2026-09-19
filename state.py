@@ -419,3 +419,5 @@ def default_state():
     STATE.setdefault("audience_requests", [])
     STATE.setdefault("mined_comments", [])
     STATE.setdefault("video_history", {})
+    STATE.setdefault("crosspost_queue", [])  # Shorts waiting to drip to
+    #   Instagram/TikTok, one a day: [{url, title, caption, added}]

@@ -817,6 +817,7 @@ body[data-role="visitor"] .field input{pointer-events:none;background:var(--wash
     <div class="rowline"><span style="flex:0 0 150px;color:var(--muted);font-size:13.5px">Publishing</span><span class="grow" id="op-hour"></span></div>
     <div class="rowline"><span style="flex:0 0 150px;color:var(--muted);font-size:13.5px">Uploads today</span><span class="grow" id="op-uploads"></span></div>
     <div class="rowline"><span style="flex:0 0 150px;color:var(--muted);font-size:13.5px">Renderer wakes</span><span class="grow" id="op-next"></span></div>
+    <div class="rowline"><span style="flex:0 0 150px;color:var(--muted);font-size:13.5px">Cross-post</span><span class="grow" id="op-crosspost"></span></div>
     <div class="actions" style="margin-top:12px">
       <button class="btn btn-sm" data-act="wake">Wake the renderer</button>
       <button class="btn btn-sm" data-act="refresh_channel">Refresh channel data</button>
@@ -1630,6 +1631,15 @@ function render(){
   $("op-uploads").innerHTML = "<b>" + (d.uploads_today || 0) + "</b>" +
     ' <span style="color:var(--muted)">of about 6 the YouTube quota allows</span>';
   $("op-next").innerHTML = esc(nextRenderText());
+  const cp = d.crosspost || {};
+  if (cp.ig || cp.tiktok) {
+    const cpon = '<span style="color:#2e7d32;font-weight:600">on</span>';
+    const cpoff = '<span style="color:var(--muted)">off</span>';
+    const cpq = cp.queue || 0;
+    $("op-crosspost").innerHTML = 'Instagram ' + (cp.ig ? cpon : cpoff) + ' · TikTok ' + (cp.tiktok ? cpon : cpoff) + ' · ' + esc(cpq + (cpq === 1 ? ' Short queued' : ' Shorts queued') + ', one drips a day');
+  } else {
+    $("op-crosspost").innerHTML = '<span style="color:var(--muted)">off — add the Instagram/TikTok tokens on Render to enable</span>';
+  }
 
   /* retention + system: painted fresh each pass, cheap string work */
   paintRetention(ana);
@@ -2755,6 +2765,26 @@ def _health_snapshot():
     }
 
 
+def _crosspost_snapshot():
+    """Cross-post wiring for the panel: which platforms are configured and
+    how many Shorts are waiting in the daily drip queue. Booleans + a
+    count only — safe for visitors, same as _health_snapshot."""
+    ig_ok = tk_ok = False
+    try:
+        import ig
+        ig_ok = ig.configured()
+    except Exception:
+        pass
+    try:
+        import tiktok
+        tk_ok = tiktok.configured()
+    except Exception:
+        pass
+    q = state.STATE.get("crosspost_queue") or []
+    return {"ig": ig_ok, "tiktok": tk_ok, "queue": len(q),
+            "next": [(c.get("title") or c.get("url", ""))[:60] for c in q[:5]]}
+
+
 @app.route("/panel")
 def panel():
     if not _panel_ok():
@@ -2941,6 +2971,9 @@ def api_state():
             and vid not in state.STATE.get("thumb_swaps", {})][:10],
         "used_topics": state.STATE.get("used_topics", [])[-25:],
         "best_hour": state.STATE.get("best_hour", 17),
+        # cross-post to Instagram (auto Reel) + TikTok (draft): platform
+        # wiring + how many Shorts are queued for the daily drip
+        "crosspost": _crosspost_snapshot(),
         # scene-aware retention: one compact finding per mapped film
         "scenes": [{"id": vid, "title": (s.get("title") or "?")[:50],
                     "drop": _scene_finding(s).get("drop"),
@@ -3623,44 +3656,100 @@ def _publish_now(approval_id, note=""):
     return True
 
 
-def _cross_post(approval_id, p):
-    """Mirror the Short to Instagram (as a live Reel) and TikTok (as a
-    draft) right after the owner's ✅ — the same approval publishes
-    everywhere. PARKED (owner decision, Sept 2026): while neither
-    platform's tokens are set, this stays completely quiet — a ✅ must
-    not nag about features that are switched off. Never raises, never
-    blocks the YouTube schedule; when a platform IS configured, every
-    outcome lands in Telegram so a silent failure is impossible."""
-    def report(emoji, platform, ok, detail):
-        comms.send(
-            f"{emoji} <b>{platform}</b> — "
-            + (f"Reel live: {comms.esc(detail)}"
-               if ok else f"skipped: {comms.esc(str(detail)[:180])}"),
-            html=True)
+CROSSPOST_HASHTAGS = "#psychology #mindtricks #darkpsychology #shorts #fyp"
 
+
+def _crosspost_caption(clip, p):
+    """A punchy IG/TikTok caption: the clip's own curiosity-gap title plus
+    the channel hashtags — not the long-form YouTube description, which
+    reads flat on a Reel."""
+    base = (clip.get("title") or p.get("title") or "").strip()
+    return f"{base}\n\n{CROSSPOST_HASHTAGS}"[:2200]
+
+
+def _cross_post(approval_id, p):
+    """Queue this video's Short(s) for the daily cross-post drip (see
+    _crosspost_drip) after the owner's ✅. Each render yields several
+    Shorts (hook + scene Shorts); dripping them one a day keeps a daily
+    Instagram/TikTok cadence off the 3-video-a-week render schedule
+    WITHOUT making a single extra video. PARKED-safe: while neither
+    platform is configured, nothing is queued and nothing is said."""
     import ig
     import tiktok
     if not (ig.configured() or tiktok.configured()):
-        return   # parked — nothing staged, nothing said
-    asset = (p.get("asset_urls") or {}).get("short")
-    caption = (p.get("description") or p.get("title") or "")[:2200]
-    if asset:
-        if ig.configured():
-            try:
-                ok, detail = ig.publish_reel(asset, caption)
-            except Exception as e:
-                ok, detail = False, e
-            report("📸", "Instagram", ok, detail)
-        if tiktok.configured():
-            try:
-                ok, detail = tiktok.inbox_post(asset)
-            except Exception as e:
-                ok, detail = False, e
-            report("🎵", "TikTok", ok, detail)
-    else:
-        report("📸", "Cross-post", False,
-               "no staged Short URL (render predates cross-posting, or "
-               "the PC worker rendered it)")
+        return   # parked — nothing queued, nothing said
+    au = p.get("asset_urls") or {}
+    clips = list(au.get("clips") or [])
+    if not clips:
+        # an older render staged only the hook Short (no "clips" list yet)
+        short = au.get("short")
+        if short:
+            clips = [{"url": short, "title": p.get("title", "")}]
+    if not clips:
+        comms.send("📸 <b>Cross-post</b> — nothing staged to queue "
+                   "(older render, or the PC worker made this one).",
+                   html=True)
+        return
+    q = state.STATE.setdefault("crosspost_queue", [])
+    added = 0
+    for c in clips:
+        if not c.get("url"):
+            continue
+        q.append({"url": c["url"],
+                  "title": c.get("title", ""),
+                  "caption": c.get("caption") or _crosspost_caption(c, p),
+                  "added": f"{datetime.now() + config.BD_OFFSET:%Y-%m-%d}"})
+        added += 1
+    # evergreen Shorts — if the queue outruns the daily drip, drop the
+    # OLDEST so it can never grow without bound
+    if len(q) > 30:
+        del q[:-30]
+    state.save_soon()
+    comms.send(f"📤 <b>Cross-post queued</b> — {added} clip(s) will post to "
+               f"Instagram/TikTok, one a day ({len(q)} waiting).", html=True)
+
+
+def _crosspost_drip():
+    """Post ONE queued Short: a live Instagram Reel + a TikTok draft.
+    Runs once a day so the Shorts we already render trickle out daily
+    instead of all landing on YouTube publish days. Pops before posting
+    (a transient platform error is reported, not retried in a storm —
+    evergreen content, losing one is cheaper than a loop). Parked-safe."""
+    import ig
+    import tiktok
+    if not (ig.configured() or tiktok.configured()):
+        return
+    q = state.STATE.get("crosspost_queue") or []
+    if not q:
+        return
+    clip = q.pop(0)
+    state.STATE["crosspost_queue"] = q
+    state.save_soon()
+    url = clip.get("url")
+    caption = clip.get("caption") or clip.get("title") or ""
+    if not url:
+        return
+
+    def report(emoji, platform, ok, detail, live_word):
+        comms.send(
+            f"{emoji} <b>{platform}</b> — "
+            + (f"{live_word}: {comms.esc(str(detail))}"
+               if ok else f"skipped: {comms.esc(str(detail)[:180])}"),
+            html=True)
+
+    if ig.configured():
+        try:
+            ok, detail = ig.publish_reel(url, caption)
+        except Exception as e:
+            ok, detail = False, e
+        report("📸", "Instagram", ok, detail, "Reel live")
+    if tiktok.configured():
+        try:
+            ok, detail = tiktok.inbox_post(url)
+        except Exception as e:
+            ok, detail = False, e
+        report("🎵", "TikTok", ok, detail, "draft ready")
+    comms.log(f"crosspost drip: posted 1, {len(q)} left in queue")
 
 
 def _delete_pending(approval_id):
@@ -4254,6 +4343,13 @@ def scheduler_loop():
                     pass
             once_per_day("crosspost token refresh",
                          _refresh_crosspost_tokens, 8, 10)
+            # Daily cross-post drip: one queued Short to Instagram/TikTok
+            # per day, at the channel's learned best hour, so the Shorts we
+            # already render trickle out daily instead of all landing on
+            # publish days. Parked-safe (no-op until a platform is
+            # configured and the queue is non-empty).
+            once_per_day("crosspost drip", _crosspost_drip,
+                         int(state.STATE.get("best_hour", 17)), 15)
             # Quality-first cadence: planning + top-up run only on
             # publish days (config.PUBLISH_WEEKDAYS — Tue/Fri/Sun = 3
             # videos a week). The retention data said volume wasn't the

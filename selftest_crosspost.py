@@ -372,33 +372,75 @@ def main():
           pend and pend.get("asset_urls", {}).get("short")
           == "https://dl/s.mp4" and pend.get("description") == "the caption")
 
-    # publish (✅) -> cross-post fires with the staged asset
+    # publish (✅) -> the Short is QUEUED for the daily drip, NOT posted
+    # on the spot (daily cadence, off the 3-a-week render schedule)
     sent.clear()
+    st.STATE["crosspost_queue"] = []
     okp = app._publish_now("jx")
     check("publish: YouTube schedule succeeds",
           okp and "jx" not in st.STATE["pending_videos"])
-    check("publish: Instagram Reel cross-posted from the staged URL",
-          any("Instagram" in m and "Reel live" in m for m in sent))
-    check("publish: TikTok draft cross-posted",
-          any("TikTok" in m and "draft" in m.lower() for m in sent))
+    check("publish: the Short is queued, not posted on the spot",
+          len(st.STATE["crosspost_queue"]) == 1
+          and st.STATE["crosspost_queue"][0]["url"] == "https://dl/s.mp4"
+          and not any("Reel live" in m for m in sent))
+    check("publish: queueing is announced with a count",
+          any("queued" in m.lower() for m in sent))
 
-    # parked: while NO platform is configured the ✅ says nothing
-    # about cross-posting (owner parked it — no nagging)
+    # the daily drip posts ONE queued clip: IG Reel + TikTok draft
+    sent.clear()
+    app._crosspost_drip()
+    check("drip: posts the queued clip to Instagram and TikTok",
+          any("Instagram" in m and "Reel live" in m for m in sent)
+          and any("TikTok" in m and "draft" in m.lower() for m in sent))
+    check("drip: the queue drains after posting",
+          len(st.STATE["crosspost_queue"]) == 0)
+
+    # empty queue -> drip is a quiet no-op
+    sent.clear()
+    app._crosspost_drip()
+    check("drip: empty queue posts nothing",
+          not any("Instagram" in m or "TikTok" in m for m in sent))
+
+    # a render with a "clips" list queues EVERY Short, each with hashtags
+    st.STATE["crosspost_queue"] = []
+    st.STATE["pending_videos"]["jc"] = {
+        "title": "T-multi", "video_url": "https://youtu.be/ee",
+        "video_urls": ["https://youtu.be/ee"],
+        "asset_urls": {"short": "https://dl/hook.mp4",
+                       "clips": [{"url": "https://dl/hook.mp4", "title": "hook"},
+                                 {"url": "https://dl/sc1.mp4", "title": "scene 1"},
+                                 {"url": "https://dl/sc2.mp4", "title": "scene 2"}]},
+        "description": "d"}
+    app._publish_now("jc")
+    check("publish: every Short in the clips list is queued",
+          len(st.STATE["crosspost_queue"]) == 3)
+    check("publish: queued clips carry a hashtag caption",
+          all("#" in c["caption"] for c in st.STATE["crosspost_queue"]))
+
+    # parked: while NO platform is configured the ✅ queues nothing and
+    # says nothing (owner parked it — no nagging)
     fake_ig.configured = lambda: False
     fake_tk.configured = lambda: False
+    st.STATE["crosspost_queue"] = []
     st.STATE["pending_videos"]["jy"] = {
         "title": "T2", "video_url": "https://youtu.be/cc",
         "video_urls": ["https://youtu.be/cc"], "asset_urls":
         {"short": "https://dl/s2.mp4"}, "description": "c2"}
     sent.clear()
     app._publish_now("jy")
-    check("publish: parked (nothing configured) stays completely silent",
-          not any("Instagram" in m or "TikTok" in m
-                  or "Cross-post" in m for m in sent))
+    check("publish: parked (nothing configured) queues nothing, stays silent",
+          not st.STATE["crosspost_queue"]
+          and not any("Instagram" in m or "TikTok" in m
+                      or "queued" in m.lower() for m in sent))
+    sent.clear()
+    app._crosspost_drip()
+    check("drip: parked (nothing configured) is a no-op",
+          not any("Instagram" in m or "TikTok" in m for m in sent))
 
     # a pending entry with NO staged asset (old render / PC worker) —
     # explained only when cross-posting is actually enabled
     fake_ig.configured = lambda: True
+    st.STATE["crosspost_queue"] = []
     st.STATE["pending_videos"]["jz"] = {
         "title": "T3", "video_url": "https://youtu.be/dd",
         "video_urls": ["https://youtu.be/dd"], "asset_urls": {},
@@ -406,7 +448,7 @@ def main():
     sent.clear()
     app._publish_now("jz")
     check("publish: missing staged asset is explained, not silent",
-          any("Cross-post" in m and "no staged Short" in m for m in sent))
+          any("Cross-post" in m and "nothing staged" in m for m in sent))
 
     print()
     if FAILS:

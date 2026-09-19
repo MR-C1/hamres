@@ -340,16 +340,29 @@ def _upload_files(script, sid):
     # the Instagram-Login path). Only when the YouTube upload worked:
     # a failed batch has nothing worth cross-posting, and the retry will
     # stage it. Actions-runner only; the PC worker has no GITHUB_TOKEN.
+    # stage EVERY Short (hook + scene Shorts) so the brain can drip them
+    # to Instagram/TikTok one a day; the long-form is skipped. "short" in
+    # the name catches both {sid}_short.mp4 and {sid}_xshort*.mp4.
     asset_urls = {}
     if urls:
         try:
             import ghassets
             if ghassets.available():
-                p = REVIEW / f"{sid}_short.mp4"
-                if p.exists():
-                    u = ghassets.upload(p, f"{sid}_short.mp4")
-                    if u:
-                        asset_urls["short"] = u
+                clips = []
+                for name, title in files:
+                    if "short" not in name:
+                        continue
+                    fp = REVIEW / name
+                    if not fp.exists():
+                        continue
+                    u = ghassets.upload(fp, name)
+                    if not u:
+                        continue
+                    if name == f"{sid}_short.mp4":
+                        asset_urls["short"] = u   # backward compat
+                    clips.append({"url": u, "title": title})
+                if clips:
+                    asset_urls["clips"] = clips
         except Exception as e:
             log.warning("asset staging failed: %s", e)
     # whatever uploaded rides the report — partial success still

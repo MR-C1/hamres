@@ -3466,6 +3466,45 @@ def api_action():
         threading.Thread(target=_drip_now, daemon=True).start()
         return jsonify({"ok": True,
                         "msg": "Posting one now — watch Telegram."})
+    if a == "probe_models":
+        # Ground-truth which Gemini models THIS key can actually reach and
+        # generate with — gemini-flash-latest is a dead alias (503). Uses
+        # the key already on Render; nothing is exposed. Result lands in
+        # Answers (panel_out) so it can be read without Telegram.
+        def _probe():
+            lines = []
+            try:
+                from google import genai
+                keys = config.GEMINI_API_KEYS or []
+                if not keys:
+                    _panel_out("probe", "no GEMINI_API_KEYS configured")
+                    return
+                client = genai.Client(api_key=keys[0])
+                try:
+                    names = [m.name for m in client.models.list()]
+                    flash = [n for n in names if "flash" in n.lower()]
+                    lines.append("LISTED flash models: "
+                                 + ", ".join(flash[:25]))
+                except Exception as e:
+                    lines.append("models.list failed: " + str(e)[:140])
+                cands = ["gemini-3-flash", "gemini-3.1-flash-lite",
+                         "gemini-3-flash-lite", "gemini-flash-latest",
+                         "gemini-flash-lite-latest", "gemini-2.0-flash",
+                         "gemini-2.5-flash", "gemini-3.0-flash"]
+                for m in cands:
+                    try:
+                        r = client.models.generate_content(
+                            model=m, contents="say ok",
+                            config={"max_output_tokens": 5})
+                        lines.append(f"OK  {m} -> {(r.text or '').strip()[:15]}")
+                    except Exception as e:
+                        lines.append(f"ERR {m}: {str(e)[:70]}")
+            except Exception as e:
+                lines.append("probe crashed: " + str(e)[:140])
+            _panel_out("probe", "\n".join(lines))
+        threading.Thread(target=_probe, daemon=True).start()
+        return jsonify({"ok": True,
+                        "msg": "Probing Gemini models — check Answers in ~20s."})
     if a.startswith("killjob:"):
         jid = a.split(":", 1)[1]
         state.reload_jobs()

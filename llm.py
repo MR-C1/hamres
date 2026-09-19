@@ -244,14 +244,38 @@ def wiki_search(query, n=5):
     return out[:n]
 
 
+_QUERY_STOP = {"the", "a", "an", "of", "and", "to", "in", "on", "for",
+               "is", "it", "json", "query", "search", "topic"}
+
+
+def _clean_query(raw, fallback=""):
+    """Pull a usable search query out of a model reply that may be wrapped
+    in a ```code fence```, prefixed with 'query:', or empty. Rejects a
+    JSON blob or a lone stopword — the old code did `.splitlines()[0]`
+    and searched Wikipedia for the literal '```json' or 'the'."""
+    t = re.sub(r"```[A-Za-z]*", " ", raw or "").replace("```", " ")
+    for line in t.splitlines():
+        line = line.strip().strip("'\"`").strip()
+        if line.lower().startswith(("query:", "search:", "topic:")):
+            line = line.split(":", 1)[1].strip()
+        if line and line[0] not in "{[}]" and len(line.split()) >= 2:
+            return line[:120]
+    return fallback[:120]
+
+
 def _keyless_research(prompt, system, max_tokens):
     """Grounded research with NO api key and NO search quota: turn the
     brief into a query, fetch REAL results (wikipedia's API from
     datacenter IPs, the DDG scrape for the broader web where it isn't
     blocked), then let the normal complete() chain extract the facts.
     Raises if no source answers or the chain is dead."""
-    query = complete(_QUERY_INSTR + prompt, None, 60).strip()
-    query = query.strip("'\"").splitlines()[0][:120].strip()
+    # Derive the query from the DIRECTION only, never the full research
+    # prompt: its "Return strict JSON" tail made the model emit a
+    # ```json``` blob whose first line ('```json') became the query.
+    brief = re.split(r"\bReturn\b", prompt)[0][:600]
+    fallback = next((ln.strip() for ln in brief.splitlines()
+                     if len(ln.split()) >= 3), "psychology mind tricks")
+    query = _clean_query(complete(_QUERY_INSTR + brief, None, 60), fallback)
     results, src = [], ""
     for fetch, name in ((wiki_search, "wikipedia"),
                         (ddg_search, "duckduckgo")):

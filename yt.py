@@ -51,6 +51,8 @@ def _with_retries(fn, attempts=3, base_delay=4):
             msg = str(e)
             transient = ("SSL" in msg or "DECRYPTION" in msg
                          or "timed out" in msg.lower()
+                         or "IncompleteRead" in msg
+                         or "Response ended prematurely" in msg
                          or isinstance(e, ConnectionError))
             if not transient or i == attempts - 1:
                 raise

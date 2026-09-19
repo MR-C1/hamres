@@ -157,20 +157,26 @@ def main():
     check("the survivor still carries its honest _qa",
           out["_qa"]["hook"] == 70 and out["_qa"]["hook"] < brain.HOOK_MIN)
 
-    # ---- 5. every scorer fails OPEN (junk response -> 75 -> passes) ----
+    # ---- 5. a junk scorer response scores 0/unscorable (NOT the old 75
+    # that silently cleared the bar): it can't pass clean, so best-of-3
+    # runs the full three attempts and ships the best, flagged in _qa ----
     brain = fresh()
-    box = rig(brain, [script_json("s1"), scorer(80), "not json at all",
-                      FACTS_OK, THUMB])
+    box = rig(brain, [script_json("s1"), scorer(80), "not json at all", FACTS_OK,
+                      script_json("s2"), scorer(80), "still not json", FACTS_OK,
+                      script_json("s3"), scorer(80), "nope", FACTS_OK,
+                      THUMB])
     out = brain.generate_script("mysteries")
-    check("junk retention scores 75 and passes",
-          out is not None and out["_qa"]["retention"] == 75)
+    check("junk retention scores 0/unscorable, never a silent 75 pass",
+          out is not None and out["_qa"]["retention"] == 0)
 
     brain = fresh()
-    box = rig(brain, [script_json("s1"), "garbage", scorer(80),
-                      FACTS_OK, THUMB])
+    box = rig(brain, [script_json("s1"), "garbage", scorer(80), FACTS_OK,
+                      script_json("s2"), "garbage again", scorer(80), FACTS_OK,
+                      script_json("s3"), "still garbage", scorer(80), FACTS_OK,
+                      THUMB])
     out = brain.generate_script("mysteries")
-    check("junk hook scores 75 and passes",
-          out is not None and out["_qa"]["hook"] == 75)
+    check("junk hook scores 0/unscorable, doesn't clear the bar",
+          out is not None and out["_qa"]["hook"] == 0)
 
     brain = fresh()
     box = rig(brain, [script_json("s1"), scorer(85), scorer(80), "junk",

@@ -452,6 +452,22 @@ def main():
         llm.requests.post = orig_post
         llm.requests.get = orig_get
 
+    # _clean_query: the research-query sanitiser. The old code did
+    # `.splitlines()[0]` and searched Wikipedia for the literal '```json'
+    # or a lone 'the'; this rejects fences/JSON/stopwords -> fallback.
+    check("clean_query strips a ```json``` fence to the fallback",
+          llm._clean_query("```json\n{\"q\": \"x\"}\n```", "mind tricks")
+          == "mind tricks")
+    check("clean_query rejects a lone stopword, uses fallback",
+          llm._clean_query("the", "decoy effect pricing")
+          == "decoy effect pricing")
+    check("clean_query keeps a real multi-word query",
+          llm._clean_query("the decoy effect in pricing", "fb")
+          == "the decoy effect in pricing")
+    check("clean_query unwraps a 'query:' label",
+          llm._clean_query("Query: anchoring bias experiments", "fb")
+          == "anchoring bias experiments")
+
     print()
     if FAILS:
         print(f"{len(FAILS)} FAILED: {', '.join(FAILS)}")

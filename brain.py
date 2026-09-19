@@ -211,8 +211,9 @@ Respond with strict JSON only: {{"score": <0-100 integer>, "reason": "<15 words 
 
 def _score_hook(script):
     """Second-opinion gate: score the hook before a 20+ min render is
-    spent on it. Fails OPEN (75/unscorable) — the gate must never block
-    production on its own API hiccup."""
+    spent on it. On an API hiccup it scores 0/unscorable (NOT the old 75,
+    which silently cleared the bar and could beat a real draft) — best-of-3
+    still ships the least-bad script, but flagged, never passed as clean."""
     try:
         r = gemini(VIRALITY_PROMPT.format(
             hook=script.get("hook", "")[:600],
@@ -225,7 +226,7 @@ def _score_hook(script):
         return int(d.get("score", 0)), str(d.get("reason", ""))[:120]
     except Exception as e:
         comms.log(f"hook scoring failed (gate open): {str(e)[:60]}")
-        return 75, "unscorable"
+        return 0, "unscorable — scorer unavailable"
 
 
 RETENTION_PROMPT = """Score this video SCRIPT (a mini-documentary) 0-100 for its ability to HOLD attention through the whole video — not the hook, the middle.
@@ -249,7 +250,8 @@ Respond with strict JSON only: {{"score": <0-100 integer>, "reason": "<15 words 
 def _score_retention(script):
     """Gate 2: hold-ability of the full script — the hook scorer only
     sees the first 30 seconds, and the 2.5% long-form retention lived in
-    the middle. Fails OPEN at 75, same contract as _score_hook."""
+    the middle. Scores 0/unscorable on an API hiccup, same contract as _score_hook —
+    flagged, never a silent pass."""
     try:
         scenes = "\n\n".join(
             f"[{i + 1}] {s.get('narration', '')}"
@@ -264,7 +266,7 @@ def _score_retention(script):
         return int(d.get("score", 0)), str(d.get("reason", ""))[:120]
     except Exception as e:
         comms.log(f"retention scoring failed (gate open): {str(e)[:60]}")
-        return 75, "unscorable"
+        return 0, "unscorable — scorer unavailable"
 
 
 RESEARCH_PROMPT = """You are researching a topic for a mind-tricks YouTube channel (dark psychology, persuasion tactics, brain glitches). Channel direction: {direction}
@@ -616,6 +618,7 @@ def queue_script(script, approval_id=None):
     job = jobs.add_job("render", payload)
     cloud.wake_soon("render")  # cloud runner starts within seconds
     state.STATE.setdefault("used_topics", []).append(script.get("id", "?"))
+    del state.STATE["used_topics"][:-200]   # only [-40:] is ever read; cap the gist
     state.save_soon()
     return job
 

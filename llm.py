@@ -52,9 +52,13 @@ def _gemini(prompt, system, max_tokens, models=None):
     to groq's big gpt-oss instead."""
     from google import genai
     last_err = None
+    dead_models = set()   # a 503/UNAVAILABLE is a GLOBAL model outage, so
+    #   don't waste a round-trip re-trying the same dead model on every key
     for key in _gemini_keys():
         client = genai.Client(api_key=key)
         for model in (models or GEMINI_MODELS):
+            if model in dead_models:
+                continue
             try:
                 cfg = {"max_output_tokens": max_tokens}
                 if system:
@@ -81,6 +85,13 @@ def _gemini(prompt, system, max_tokens, models=None):
                     comms.log(f"gemini key ...{key[-6:]} rejected (401/403) "
                               f"— rotating to next key")
                     break
+                if "503" in msg or "UNAVAILABLE" in msg:
+                    # model-level outage (gemini-flash-latest is chronically
+                    # 503) — retire it for this call so scripts fall straight
+                    # through to groq instead of paying N×503 across keys
+                    dead_models.add(model)
+                    comms.log(f"gemini {model} unavailable (503) — skipping")
+                    continue
                 comms.log(f"gemini {model} failed: {msg[:80]}")
     raise RuntimeError(f"all gemini models failed: {last_err}")
 

@@ -535,6 +535,18 @@ def _craft_lessons(n=10):
     guidance, so every new script preemptively fixes the mistakes this
     channel actually makes — the bot learns from itself. Fail-safe: no
     usable history -> empty string (prompt unchanged)."""
+    items = _craft_lesson_items(n)
+    if not items:
+        return ""
+    return ("\n\nRECURRING WEAKNESSES the QA gate keeps flagging on this "
+            "channel's scripts — fix every one preemptively so it does NOT "
+            "happen again:\n- " + "\n- ".join(items))
+
+
+def _craft_lesson_items(n=10):
+    """The distinct recurring low-score QA weaknesses, most recent first
+    (also surfaced on the panel so the owner can watch the bot self-correct
+    — not just the prompt injection above)."""
     reasons = []
     for key in ("hook_scores", "retention_scores"):
         for r in state.STATE.get(key, [])[-n:]:
@@ -545,8 +557,6 @@ def _craft_lessons(n=10):
                 low = False
             if txt and low and "unscorable" not in txt.lower():
                 reasons.append(txt)
-    if not reasons:
-        return ""
     seen, distinct = set(), []
     for t in reversed(reasons):          # most recent weaknesses first
         k = t.lower()[:40]
@@ -555,9 +565,7 @@ def _craft_lessons(n=10):
             distinct.append(t)
         if len(distinct) >= 5:
             break
-    return ("\n\nRECURRING WEAKNESSES the QA gate keeps flagging on this "
-            "channel's scripts — fix every one preemptively so it does NOT "
-            "happen again:\n- " + "\n- ".join(distinct))
+    return distinct
 
 
 def _write_script(direction=None, research=None, feedback=None):

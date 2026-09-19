@@ -754,6 +754,7 @@ body[data-role="visitor"] .field input{pointer-events:none;background:var(--wash
       <div class="note" style="font-size:12.5px;color:var(--muted);margin-bottom:6px">Hook &amp; retention scores from the QA gate, recent first.</div>
       <div id="qualsum" style="font:600 14px/1.4 var(--serif);margin-bottom:8px"></div>
       <div id="hooks"></div>
+      <div id="learnnote" style="font-size:12.5px;color:var(--muted);margin-top:10px"></div>
     </div>
     <div class="card">
       <h3 style="font:600 17px/1.2 var(--serif)">Auto-approve trust</h3>
@@ -1604,6 +1605,12 @@ function render(){
   $("qualsum").innerHTML = (ah==null && ar==null)
     ? '<span style="color:var(--muted)">No scores yet.</span>'
     : 'avg hook <b style="color:'+hookColor(ah||0)+'">'+(ah==null?'—':ah)+'</b> · avg retention <b style="color:'+hookColor(ar||0)+'">'+(ar==null?'—':ar)+'</b> <span style="color:var(--muted);font-weight:400">(last 10)</span>';
+
+  /* self-learning: the weaknesses now fed back into every new script */
+  const les = d.lessons || [];
+  $("learnnote").innerHTML = les.length
+    ? '<b style="color:var(--ink,inherit)">Learning to fix next:</b> ' + les.map(x=>esc(x)).join(' · ')
+    : 'Self-learning active — weaknesses the QA gate flags feed into the next script automatically.';
 
   /* trust meter */
   const n = Math.min(10, Math.max(0, d.settings.approved));
@@ -2921,6 +2928,8 @@ def api_state():
         "history": hist[-30:],
         "hooks": state.STATE.get("hook_scores", [])[-30:],
         "retention_qa": state.STATE.get("retention_scores", [])[-30:],
+        # self-learning: the recurring weaknesses now fed back into scripts
+        "lessons": brain._craft_lesson_items(),
         "queue": {"pending": sum(1 for j in jobs_list if j["status"] == "pending"),
                   "claimed": sum(1 for j in jobs_list if j["status"] == "claimed"),
                   "failed": sum(1 for j in jobs_list if j["status"] == "failed"),

@@ -951,6 +951,7 @@ body[data-role="visitor"] .field input{pointer-events:none;background:var(--wash
       <div class="alabel">Clearing</div>
       <div class="actions">
         <button class="btn btn-danger" data-confirm="Clear the failed jobs from the queue?" data-act="clear_failed">Clear failed jobs</button>
+        <button class="btn btn-danger" data-confirm="Clear ALL jobs from the queue? Videos waiting for your decision stay." data-act="clear_jobs">Clear jobs, keep approvals</button>
         <button class="btn btn-danger" data-confirm="Wipe the queue and drop pending approvals?" data-act="clear_all">Clear everything</button>
       </div>
       <div class="note" style="font-size:12.5px;color:var(--muted);margin-top:8px">Neither one deletes a video from YouTube; uploads waiting on you stay private.</div>
@@ -1166,7 +1167,7 @@ const NICE = {next:"New video queued", idea:"Script queued", chat:"Asked the man
   publish:"Published", reject:"Deleted from YouTube", vpub:"Video is public",
   vpriv:"Video is private", retitle:"Title updated", retry:"Jobs requeued",
   pause:"Paused", resume:"Resumed", clear_failed:"Failed jobs cleared",
-  clear_all:"Everything cleared", reset:"Counter reset",
+  clear_all:"Everything cleared", clear_jobs:"Jobs cleared, approvals kept", reset:"Counter reset",
   toggle_auto:"Auto-approve switched", refresh_channel:"Channel data refreshed", crosspost_now:"Posting to Instagram/TikTok",
   wake:"Renderer woken", direction:"Guidance saved", set_hour:"Publish hour saved",
   set_after:"Threshold saved", killjob:"Job cancelled", forget:"Topic freed up",
@@ -1177,7 +1178,7 @@ const NICE = {next:"New video queued", idea:"Script queued", chat:"Asked the man
   thumb_test:"Thumbnail A/B started"};
 const BUSY = {next:"Queueing…", idea:"Writing…", chat:"Asking…", publish:"Publishing…",
   reject:"Deleting…", retry:"Requeueing…", pause:"Pausing…", resume:"Resuming…",
-  clear_failed:"Clearing…", clear_all:"Clearing…", clear_out:"Clearing…",
+  clear_failed:"Clearing…", clear_all:"Clearing…", clear_jobs:"Clearing…", clear_out:"Clearing…",
   reset:"Resetting…", toggle_auto:"Switching…", refresh_channel:"Refreshing…", crosspost_now:"Posting…",
   wake:"Waking…", direction:"Saving…", report:"Writing…", plan:"Planning…",
   titlecheck:"Checking…", comments:"Reading…", diag:"Testing…",
@@ -3275,6 +3276,14 @@ def api_action():
                              if j.get("status") == "failed")
         state.STATE["jobs"] = [j for j in state.STATE["jobs"]
                                if j.get("status") != "failed"]
+        state.save_now()
+        return jsonify({"ok": True})
+    if a == "clear_jobs":
+        # empty the whole job queue but KEEP pending approvals — the middle
+        # ground between clear_failed and clear_all (mirrors Telegram /clear)
+        state.reload_jobs()
+        state.tombstone_jobs(j["id"] for j in state.STATE["jobs"])
+        state.STATE["jobs"] = []
         state.save_now()
         return jsonify({"ok": True})
     if a == "clear_all":

@@ -25,8 +25,14 @@ import requests
 import comms
 import config
 
-GEMINI_MODELS = ["gemini-flash-latest", "gemini-3.5-flash-lite",
-                 "gemini-3.1-flash-lite", "gemini-flash-lite-latest"]
+# Probed live 2026-09-19 (panel probe_models): gemini-flash-latest is a
+# flaky alias (chronic 503 / empty replies) and gemini-2.5-* now 404. This
+# general chain leads with LITE models on purpose — the many small calls
+# (scorers, query derivation, fact-check) get 1000 RPD of headroom and
+# leave the fuller flash daily budget for script writing (SCRIPT_GEMINI_
+# MODELS in brain.py). All three ids generate on the free-tier key.
+GEMINI_MODELS = ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite",
+                 "gemini-flash-lite-latest"]
 
 # key rotation: {key: cooldown_until}. A 429 cools that KEY for 30 min
 # (covers per-minute limits; per-day quotas revive on window rollover)

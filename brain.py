@@ -70,13 +70,14 @@ def gemini(prompt, system=SYSTEM, gemini_models=None):
 # script generation (same JSON schema as the pipeline queue)
 # ---------------------------------------------------------------------------
 
-# flash-latest ONLY for script writing: when it 503s (chronic), the lite
-# geminis behind it in llm.GEMINI_MODELS quietly take over — and they are
-# the ones writing the 3-6 scene stubs. Skipping them lets the chain fall
-# straight to groq's gpt-oss-120b, a big model that honors the 8-12 scene
-# format. Lite models stay in the chain for everything short (scoring,
-# comments, summaries).
-SCRIPT_GEMINI_MODELS = ["gemini-flash-latest"]
+# Pinned FULL-flash for script writing (probed live 2026-09-19 against the
+# real key). The old value "gemini-flash-latest" was a dead alias (chronic
+# 503), so scripts silently fell to groq's gpt-oss — the "academic essay"
+# voice the QA scorer kept flagging. gemini-3.8/3.5-flash generate reliably
+# and honor the 8-12 scene format; the lite geminis (which wrote 3-6 scene
+# stubs) are deliberately kept OUT of this list, and stay in
+# llm.GEMINI_MODELS only for the short calls (scoring, comments, summaries).
+SCRIPT_GEMINI_MODELS = ["gemini-3.8-flash", "gemini-3.5-flash"]
 
 SCRIPT_PROMPT = """Write ONE video script for a faceless YouTube mind-tricks channel (dark psychology, persuasion tactics, brain glitches), as strict JSON only (no markdown, no commentary):
 

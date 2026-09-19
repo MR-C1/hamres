@@ -64,14 +64,17 @@ def main():
 
     brain.gemini = fake_gemini
 
-    # 0. script writing asks for the big-model chain only (flash-latest
-    #    503s are chronic; the lite geminis behind it write the stubs)
+    # 0. script writing asks for the pinned full-flash chain only — never a
+    #    lite gemini (lites wrote 3-6 scene stubs) and never the dead
+    #    "-latest" alias (chronic 503); probed live ids only
     calls["plan"] = [good_script(10)]
     brain._write_script("mysteries")
     check("script generation passes the big-model gemini list",
           calls["models"], [brain.SCRIPT_GEMINI_MODELS])
-    check("the big-model list is flash-latest only",
-          brain.SCRIPT_GEMINI_MODELS, ["gemini-flash-latest"])
+    check("script model list is pinned full-flash: no lite, no dead alias",
+          bool(brain.SCRIPT_GEMINI_MODELS)
+          and all("flash" in m and "lite" not in m and "latest" not in m
+                  for m in brain.SCRIPT_GEMINI_MODELS), True)
     calls["n"] = 0  # the count checks below are per-scenario
 
     # 1. good script passes on the first call — no retry spent

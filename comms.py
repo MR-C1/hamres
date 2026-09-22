@@ -102,8 +102,34 @@ def _plain(s):
     return _html.unescape(re.sub(r"</?[a-zA-Z][^>]{0,80}>", "", s))
 
 
+def _mirror_notify(text, html):
+    """Mirror an owner-facing message into a durable feed the panel reads,
+    so browser notifications can fully replace Telegram. The panel polls
+    /api/state, spots feed ids past the last it showed, and raises a
+    desktop/phone notification for each. Best-effort: a mirror failure must
+    never stop the actual send. Runs even when no Telegram token is set —
+    that is the whole point (the panel becomes the only channel needed)."""
+    try:
+        import state
+        body = (_plain(str(text)) if html else str(text)).strip()
+        if not body:
+            return
+        feed = state.STATE.setdefault("notify_feed", [])
+        nid = int(state.STATE.get("notify_seq", 0)) + 1
+        state.STATE["notify_seq"] = nid
+        now = datetime.now() + config.BD_OFFSET
+        feed.append({"id": nid, "t": f"{now:%H:%M:%S}",
+                     "title": body.split("\n", 1)[0][:80],
+                     "body": body[:300]})
+        del feed[:-40]
+        state.save_soon()
+    except Exception:
+        pass
+
+
 def send(text, chat_id=None, html=False):
     """Send a message, split at Telegram's 4096-char cap."""
+    _mirror_notify(text, html)
     chat_id = chat_id or config.OWNER_CHAT_ID
     if not chat_id or not text:
         return False

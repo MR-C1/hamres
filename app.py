@@ -530,6 +530,8 @@ th button:hover{color:var(--ink)}
 .btn-sm{padding:5px 12px;min-height:32px;font-size:13px}
 .linkbtn{background:none;border:0;padding:6px 8px;min-height:32px;font:500 13.5px var(--sans);color:var(--muted);cursor:pointer;border-radius:var(--rad);text-decoration:underline;text-underline-offset:3px}
 .linkbtn:hover{color:var(--red)}
+#alerts{text-decoration:none;border:1px solid var(--line,#3333);white-space:nowrap}
+#alerts.on{color:var(--gold,#c79a3a);border-color:currentColor}
 /* a row action never wraps: "Make private" on two lines reads like two links */
 td.act .linkbtn{white-space:nowrap}
 .actions{display:flex;flex-wrap:wrap;gap:8px}
@@ -701,6 +703,7 @@ body[data-role="visitor"] .field input{pointer-events:none;background:var(--wash
          about auto-approve and a button label at the foot of the page -->
     <span class="pausedflag" id="pausedflag" hidden>agent paused</span>
     <span class="rolebadge" id="rolebadge" hidden><span class="dot"></span>visitor · read-only</span>
+    <button class="linkbtn" id="alerts" title="Get a desktop/phone notification when the agent queues a video, cross-posts, or hits a snag — so you never need Telegram">🔔 Alerts off</button>
     <a class="linkbtn" href="/panel/logout" id="signout">Sign out</a>
     <button id="refresh"></button>
   </div>
@@ -1159,6 +1162,53 @@ function toast(msg, err, sticky){
 }
 $("toast").addEventListener("click", () => $("toast").classList.remove("show"));
 
+/* ---- browser notifications --------------------------------------------------
+   The agent used to reach the owner only through Telegram. Every owner-facing
+   message is now also mirrored into d.notify (a small durable feed); when the
+   reader has granted permission the panel raises a real desktop/phone
+   notification for each new one, so the panel is the only channel needed.
+   NOTIFIED tracks the highest feed id we have already shown — persisted so a
+   reload doesn't re-alert, and seeded from the current high-water mark the
+   first time so opening the panel never dumps the backlog at you. */
+let NOTIFIED = Number(localStorage.getItem("notifiedId") || 0);
+function alertsBtn(){
+  const b = $("alerts"); if (!b) return;
+  const on = ("Notification" in window) && Notification.permission === "granted";
+  b.textContent = on ? "🔔 Alerts on" : "🔔 Alerts off";
+  b.classList.toggle("on", on);
+  if (!("Notification" in window)) { b.hidden = true; }
+  else if (Notification.permission === "denied") b.title = "Notifications are blocked for this site — turn them on in your browser's site settings";
+}
+if ($("alerts")) $("alerts").addEventListener("click", async () => {
+  if (!("Notification" in window)) { toast("This browser can't show notifications", true); return; }
+  if (Notification.permission === "granted") { toast("Alerts already on"); alertsBtn(); return; }
+  if (Notification.permission === "denied") { toast("Notifications are blocked — unblock this site in your browser settings", true, true); return; }
+  const p = await Notification.requestPermission();
+  alertsBtn();
+  if (p === "granted") { try { new Notification("FOOTNOTE alerts on", {body:"You'll get a ping here when the agent queues a video, cross-posts, or hits a snag."}); } catch(e){} }
+});
+/* fire a notification for every feed row past the last we showed. On the very
+   first poll we only move the marker (seed it) so no backlog fires. */
+function pingNotify(d){
+  if (!d || !("Notification" in window) || Notification.permission !== "granted") {
+    if (d && typeof d.notify_seq === "number" && !localStorage.getItem("notifiedId"))
+      { NOTIFIED = d.notify_seq; localStorage.setItem("notifiedId", NOTIFIED); }
+    return;
+  }
+  const feed = (d.notify || []).filter(n => Number(n.id) > NOTIFIED);
+  if (!feed.length) return;
+  /* seed silently the first time we ever see the feed with permission on */
+  const seeded = localStorage.getItem("notifiedId") != null;
+  feed.forEach(n => {
+    if (seeded && !document.hasFocus()) {
+      try { new Notification("FOOTNOTE · " + (n.title||"update"), {body:n.body||"", tag:"fn"+n.id}); } catch(e){}
+    }
+    NOTIFIED = Math.max(NOTIFIED, Number(n.id));
+  });
+  localStorage.setItem("notifiedId", NOTIFIED);
+}
+alertsBtn();
+
 /* ---- action buttons ---------------------------------------------------------
    Every button on every tab goes through act(). It answers three questions the
    old version left the reader guessing at: did the click register (the button
@@ -1402,6 +1452,7 @@ async function load(){
     $("loadfail").hidden = true;
     if (FAILS) { jlog("agent", "the agent answered again after " + FAILS + " missed poll" + (FAILS > 1 ? "s" : "")); FAILS = 0; }
     watch(prev, fresh);
+    pingNotify(fresh);
     render();
     if (!COUNTED) { COUNTED = true; countUp(); }
   } catch(e) {
@@ -3010,6 +3061,11 @@ def api_state():
         "uploads_today": uploads_today,
         # newest text answer a panel button asked for (diag/chat/report)
         "out": (state.STATE.get("panel_out") or [None])[-1],
+        # owner-facing pings -> browser notifications (Telegram-free). Only
+        # the tail + the high-water id: the panel notifies on ids past the
+        # last it showed, so this stays a few rows on every poll.
+        "notify": state.STATE.get("notify_feed", [])[-12:],
+        "notify_seq": state.STATE.get("notify_seq", 0),
     }
     # The durable log and the whole output mailbox are only worth shipping
     # when the Ledger asks for them — the 15s poll stays small.

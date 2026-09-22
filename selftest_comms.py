@@ -79,6 +79,28 @@ def main():
     check("an ampersand stays escaped for HTML",
           comms.md("Q&A"), "Q&amp;A")
 
+    # --- notify mirror: every owner-facing send() becomes a durable feed
+    # row the panel turns into a browser notification, even with no Telegram
+    # token configured (that is what makes the panel the only channel) ----
+    import config
+    import state
+    state.STATE.clear()
+    state.LOADED = True
+    state.default_state()
+    state.save_soon = lambda *a, **k: None
+    config.OWNER_CHAT_ID = ""   # no Telegram — mirror must still fire
+    comms.send("Video queued: The Clerk Who Knew\nhook 88", html=False)
+    comms.send("<b>Cross-posted</b> to Instagram", html=True)
+    feed = state.STATE["notify_feed"]
+    check("both sends mirrored to the notify feed with no Telegram set",
+          len(feed), 2)
+    check("notify ids are monotonic (panel notifies on ids past last-seen)",
+          [n["id"] for n in feed], [1, 2])
+    check("the feed title is the first line, HTML stripped",
+          feed[1]["title"], "Cross-posted to Instagram")
+    check("an empty send mirrors nothing",
+          (comms.send("", html=False), len(state.STATE["notify_feed"]))[1], 2)
+
     print()
     if fails:
         print(f"{len(fails)} FAILED: {', '.join(fails)}")

@@ -3805,7 +3805,7 @@ def queue_render():
     if data.get("approval_id"):
         payload["approval_id"] = data["approval_id"]
     job = jobs.add_job("render", payload)
-    cloud.wake_soon("render")
+    cloud.wake_soon("render", script.get("title", ""))
     comms.send(f"🎬 <b>Custom render queued</b> — "
                f"{comms.esc(script['title'][:50])}", html=True)
     return jsonify({"ok": True, "job_id": job["id"]})

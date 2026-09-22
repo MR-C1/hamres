@@ -1,5 +1,15 @@
 name: Render Worker
 
+# Name each run after the video that woke it, so the Actions list reads
+# like a render history instead of a wall of identical "Render Worker"
+# rows. On-demand wakes carry the triggering job's title in the dispatch
+# payload (see cloud.py); scheduled and manual runs say so plainly.
+run-name: >-
+  Render · ${{ github.event.client_payload.title
+    || (github.event_name == 'schedule' && 'scheduled batch')
+    || (github.event_name == 'workflow_dispatch' && 'manual run')
+    || 'on-demand' }}
+
 # Cloud render farm: 3x a day on schedule, PLUS instantly on demand —
 # the brain fires a repository_dispatch ("render-wake") whenever it queues
 # a render job, so the cloud worker starts within seconds instead of

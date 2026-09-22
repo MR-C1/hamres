@@ -618,6 +618,12 @@ def render_from_dict(script, config):
     if extra_shorts:
         log.info("extra scene-shorts: %s",
                  ", ".join(f"scene {i}" for i, _ in extra_shorts))
+    # The review dir must exist before the FIRST write into it. The long
+    # format's timeline JSON below is written before that format's own
+    # mkdir would run, so on a cold runner (empty output/) the very first
+    # write crashed with FileNotFoundError and failed the whole render.
+    # Create it once, up front — mkdir(exist_ok) is idempotent.
+    REVIEW.mkdir(parents=True, exist_ok=True)
     for fmt, w, h in formats:
         blocks = pick_scenes(script, fmt, durations)
         if fmt == "long":
@@ -633,7 +639,6 @@ def render_from_dict(script, config):
         # is never re-rendered — a minute-35 crash used to redo both
         # formats (and the TTS/footage below are cached too, so a retry
         # costs only the step that failed)
-        REVIEW.mkdir(parents=True, exist_ok=True)
         out_path = REVIEW / f"{sid}_{fmt}.mp4"
         if _render_valid(out_path):
             log.info("resume: %s already rendered — skipping", out_path.name)

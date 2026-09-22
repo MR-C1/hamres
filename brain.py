@@ -711,7 +711,7 @@ def queue_script(script, approval_id=None):
     if approval_id:
         payload["approval_id"] = approval_id
     job = jobs.add_job("render", payload)
-    cloud.wake_soon("render")  # cloud runner starts within seconds
+    cloud.wake_soon("render", script.get("title", ""))  # names the run too
     state.STATE.setdefault("used_topics", []).append(script.get("id", "?"))
     del state.STATE["used_topics"][:-200]   # only [-40:] is ever read; cap the gist
     state.save_soon()

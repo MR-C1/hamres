@@ -40,19 +40,28 @@ def _already_dispatched_recently(kind, seconds=300):
         return False
 
 
-def wake_cloud_worker(kind="render"):
-    """Fire the render-wake event. Non-blocking, never raises."""
+def wake_cloud_worker(kind="render", title=""):
+    """Fire the render-wake event. Non-blocking, never raises.
+
+    `title` (when given) rides in the payload so the Actions run can name
+    itself after the video that triggered it — see the workflow's
+    run-name. It's the triggering job's title, not a guarantee of the
+    only job the run renders (the worker drains the whole queue), but it
+    turns an anonymous "Render Worker" row into a findable one."""
     if not config.GITHUB_DISPATCH_TOKEN:
         return  # not configured — cron + PC worker still cover everything
     if _already_dispatched_recently(kind):
         return
+    payload = {"kind": kind}
+    if title:
+        payload["title"] = str(title)[:80]
     try:
         r = requests.post(
             f"https://api.github.com/repos/{config.GITHUB_REPO}/dispatches",
             headers={"Authorization": f"Bearer {config.GITHUB_DISPATCH_TOKEN}",
                      "Accept": "application/vnd.github+json"},
             json={"event_type": "render-wake",
-                  "client_payload": {"kind": kind}},
+                  "client_payload": payload},
             timeout=15)
         if r.status_code == 204:
             comms.log(f"cloud worker woke ({kind} job queued)")
@@ -64,7 +73,7 @@ def wake_cloud_worker(kind="render"):
         comms.log(f"cloud wake failed: {str(e)[:80]}")
 
 
-def wake_soon(kind="render"):
+def wake_soon(kind="render", title=""):
     """Fire-and-forget from request handlers so they never wait on GitHub."""
-    threading.Thread(target=wake_cloud_worker, args=(kind,),
+    threading.Thread(target=wake_cloud_worker, args=(kind, title),
                      daemon=True).start()

@@ -1,15 +1,18 @@
 """LLM layer — one entry point, complete(), with a multi-provider
-fallback chain: Gemini (native) → Groq → OpenRouter → Cloudflare
-Workers AI (all OpenAI-compatible after Gemini).
+fallback chain: Gemini (native) → Groq → Cerebras → SambaNova →
+OpenRouter → Cloudflare Workers AI (all OpenAI-compatible after Gemini).
 
 Gemini is primary (script quality on free tier). The rest are optional
 safety nets — add their free keys on Render and the chain uses them
-automatically whenever the provider above is down or over quota.
-Cloudflare sits last: its models are the weakest of the four and its
-free 10K neurons/day go furthest when it only fires in a true
-everything-else-is-down emergency. It needs both CF_API_TOKEN and
-CF_ACCOUNT_ID (the endpoint is per-account) — with either missing the
-chain skips it.
+automatically whenever the provider above is down or over quota. Groq,
+Cerebras and SambaNova are all card-free permanent free tiers; SambaNova
+in particular runs strong open models (DeepSeek / big Llama·Qwen) that
+match or beat Gemini-flash for script writing, so a full Gemini outage no
+longer means a quality drop. Cloudflare sits last: its models are the
+weakest of the set and its free 10K neurons/day go furthest when it only
+fires in a true everything-else-is-down emergency. It needs both
+CF_API_TOKEN and CF_ACCOUNT_ID (the endpoint is per-account) — with
+either missing the chain skips it.
 
 search_complete() is the grounded-research entry point: Gemini WITH
 google_search, then a keyless DuckDuckGo scrape digested by the normal
@@ -416,6 +419,26 @@ def complete(prompt, system=None, max_tokens=8000, gemini_models=None):
         except Exception as e:
             errors.append(f"groq: {str(e)[:150]}")
 
+    if config.CEREBRAS_API_KEY:
+        try:
+            text = _openai_compatible(
+                "https://api.cerebras.ai", config.CEREBRAS_API_KEY,
+                config.CEREBRAS_MODEL, prompt, system, max_tokens)
+            comms.log(f"fallback used: cerebras ({config.CEREBRAS_MODEL})")
+            return text
+        except Exception as e:
+            errors.append(f"cerebras: {str(e)[:150]}")
+
+    if config.SAMBANOVA_API_KEY:
+        try:
+            text = _openai_compatible(
+                "https://api.sambanova.ai", config.SAMBANOVA_API_KEY,
+                config.SAMBANOVA_MODEL, prompt, system, max_tokens)
+            comms.log(f"fallback used: sambanova ({config.SAMBANOVA_MODEL})")
+            return text
+        except Exception as e:
+            errors.append(f"sambanova: {str(e)[:150]}")
+
     if config.OPENROUTER_API_KEY:
         try:
             text = _openai_compatible(
@@ -459,6 +482,10 @@ def diagnose():
     for name, base, key, model in [
         ("groq", "https://api.groq.com/openai", config.GROQ_API_KEY,
          config.GROQ_MODEL),
+        ("cerebras", "https://api.cerebras.ai", config.CEREBRAS_API_KEY,
+         config.CEREBRAS_MODEL),
+        ("sambanova", "https://api.sambanova.ai", config.SAMBANOVA_API_KEY,
+         config.SAMBANOVA_MODEL),
         ("openrouter", "https://openrouter.ai/api", config.OPENROUTER_API_KEY,
          config.OPENROUTER_MODEL),
         ("cloudflare", _cf_base() if config.CF_ACCOUNT_ID else "",

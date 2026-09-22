@@ -176,6 +176,47 @@ def main():
         check("cloudflare untouched when groq succeeds",
               not any("cloudflare" in c["url"] for c in CALLS))
 
+        # 3b. cerebras and sambanova sit between groq and openrouter, are
+        #     skipped without their keys, and each answers at its own
+        #     OpenAI-compatible /v1 endpoint when it is first live. Groq
+        #     still wins over both when all three are up.
+        CALLS.clear()
+        reset(GEMINI_API_KEY="", GEMINI_API_KEYS=[], GROQ_API_KEY="",
+              CEREBRAS_API_KEY="cbk", SAMBANOVA_API_KEY="",
+              OPENROUTER_API_KEY="", CF_API_TOKEN="cftok",
+              CF_ACCOUNT_ID="acc123")
+        out = llm.complete("hi")
+        cb = [c for c in CALLS if "api.cerebras.ai" in c["url"]]
+        check("cerebras answers when it is the first live provider",
+              out == "ANSWER" and len(cb) == 1)
+        check("cerebras hits its /v1 chat-completions endpoint",
+              cb and cb[0]["url"]
+              == "https://api.cerebras.ai/v1/chat/completions")
+        check("cloudflare untouched when cerebras succeeds",
+              not any("cloudflare" in c["url"] for c in CALLS))
+
+        CALLS.clear()
+        reset(CEREBRAS_API_KEY="", SAMBANOVA_API_KEY="snk")
+        out = llm.complete("hi")
+        sn = [c for c in CALLS if "api.sambanova.ai" in c["url"]]
+        check("sambanova answers when it is the first live provider",
+              out == "ANSWER" and len(sn) == 1)
+        check("sambanova hits its /v1 chat-completions endpoint",
+              sn and sn[0]["url"]
+              == "https://api.sambanova.ai/v1/chat/completions")
+
+        CALLS.clear()
+        reset(GROQ_API_KEY="groqk", CEREBRAS_API_KEY="cbk",
+              SAMBANOVA_API_KEY="snk")
+        out = llm.complete("hi")
+        check("groq precedes cerebras and sambanova when all are live",
+              out == "ANSWER"
+              and not any("cerebras" in c["url"] or "sambanova" in c["url"]
+                          for c in CALLS))
+        # clear the two new keys so the cloudflare-focused tests below
+        # still fall all the way through to cloudflare
+        reset(CEREBRAS_API_KEY="", SAMBANOVA_API_KEY="")
+
         # 4. auth header and model name ride along to cloudflare
         CALLS.clear()
         reset(GEMINI_API_KEY="", GEMINI_API_KEYS=[], GROQ_API_KEY="",
@@ -198,6 +239,9 @@ def main():
         cf_line = next((l for l in lines if "cloudflare" in l), "")
         check("diagnose shows cloudflare attempt",
               cf_line.startswith("❌ cloudflare"))
+        check("diagnose lists cerebras and sambanova as providers",
+              any("cerebras" in l for l in lines)
+              and any("sambanova" in l for l in lines))
         ddg_line = next((l for l in lines if "duckduckgo" in l), "")
         check("diagnose shows the duckduckgo fallback armed",
               ddg_line.startswith("✅ duckduckgo"))

@@ -48,6 +48,23 @@ CF_ACCOUNT_ID = os.environ.get("CF_ACCOUNT_ID", "")
 CF_MODEL = os.environ.get(
     "CF_MODEL", "@cf/meta/llama-3.3-70b-instruct-fp8-fast")
 
+# Cerebras (cloud.cerebras.ai) — free, no credit card, OpenAI-compatible.
+# Blazing fast, ~1M tokens/day free on gpt-oss-120b (same model class as
+# Groq's workhorse) — a second independent provider for the day Groq is
+# also down. If the default model 404s, check inference-docs.cerebras.ai
+# /models/overview and set CEREBRAS_MODEL (e.g. a qwen id).
+CEREBRAS_API_KEY = os.environ.get("CEREBRAS_API_KEY", "")
+CEREBRAS_MODEL = os.environ.get("CEREBRAS_MODEL", "gpt-oss-120b")
+
+# SambaNova (cloud.sambanova.ai) — free Developer Tier, no credit card,
+# OpenAI-compatible, ~20M tokens/day across models (the most generous
+# free quota of the lot). Runs strong open models — DeepSeek and big
+# Llama/Qwen — arguably matching or beating Gemini-flash for script
+# writing. If the default 404s, check docs.sambanova.ai for the current
+# model id and set SAMBANOVA_MODEL.
+SAMBANOVA_API_KEY = os.environ.get("SAMBANOVA_API_KEY", "")
+SAMBANOVA_MODEL = os.environ.get("SAMBANOVA_MODEL", "DeepSeek-V3-0324")
+
 # YouTube: refresh token + client from the one-time extract_refresh_token.py run
 YT_REFRESH_TOKEN = os.environ.get("YT_REFRESH_TOKEN", "")
 YT_CLIENT_ID = os.environ.get("YT_CLIENT_ID", "")

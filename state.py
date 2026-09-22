@@ -423,3 +423,5 @@ def default_state():
     #   Instagram/TikTok, one a day: [{url, title, caption, added}]
     STATE.setdefault("notify_feed", [])      # owner-facing pings the panel
     STATE.setdefault("notify_seq", 0)        #   turns into browser notifs
+    STATE.setdefault("crosspost_last", {})   # last drip result per platform:
+    #   {"ig": {ok, detail, title, when}, "tiktok": {...}} for the Social tab

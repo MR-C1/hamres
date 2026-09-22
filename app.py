@@ -719,6 +719,7 @@ body[data-role="visitor"] .field input{pointer-events:none;background:var(--wash
 .tile,.card,.chart{transition:box-shadow .18s ease,transform .18s ease,border-color .18s ease}
 .tile:hover,.chart:hover{transform:translateY(-1px);box-shadow:0 2px 4px rgba(20,20,30,.06),0 14px 30px -14px rgba(20,20,30,.22);border-color:var(--rule-soft)}
 .tile .value{font-variant-numeric:tabular-nums}
+.card h3{font:600 18px/1.2 var(--serif);margin-bottom:4px}
 
 /* a sticky tab strip: the nav stays put on long tabs (Ledger, Films) so the
    reader never scrolls away from it. The masthead scrolls off naturally —
@@ -769,6 +770,7 @@ nav{position:sticky;top:0;z-index:19;background:var(--paper);box-shadow:0 1px 0 
 <nav role="tablist" aria-label="Panel sections">
   <button role="tab" aria-selected="true" data-t="desk" id="tab-desk">Desk</button>
   <button role="tab" aria-selected="false" data-t="films" id="tab-films">Films</button>
+  <button role="tab" aria-selected="false" data-t="social" id="tab-social">Social</button>
   <button role="tab" aria-selected="false" data-t="dec" id="tab-dec">Decisions<span class="count zero" id="navdec"></span></button>
   <button role="tab" aria-selected="false" data-t="studio" id="tab-studio">Studio</button>
   <button role="tab" aria-selected="false" data-t="ledger" id="tab-ledger">Ledger</button>
@@ -932,6 +934,34 @@ nav{position:sticky;top:0;z-index:19;background:var(--paper);box-shadow:0 1px 0 
       </tr></thead>
       <tbody id="vids"></tbody>
     </table></div>
+  </div>
+</section>
+
+<!-- ============ SOCIAL (Instagram + TikTok) ============ -->
+<section class="tab" id="t-social" role="tabpanel" aria-labelledby="tab-social">
+  <div class="sec"><h2>Instagram &amp; TikTok</h2><span class="note">Your YouTube Shorts, reposted automatically — one a day.</span></div>
+  <div class="card" id="cp-how">
+    <p style="font-size:14.5px;line-height:1.6">Every video you publish is chopped into Shorts. Those Shorts are queued here and <b>one is posted per day</b> to each connected platform, at your best hour — no extra videos, no manual work. Instagram goes live as a Reel; TikTok lands as a draft you tap to publish.</p>
+  </div>
+  <div class="duo">
+    <div class="card">
+      <h3>📸 Instagram</h3>
+      <div id="ig-status" class="st st-off"><span class="dot"></span>—</div>
+      <p class="note" style="margin:8px 0 0">Posts as a <b>live Reel</b> automatically. Caption = the clip's title + channel hashtags.</p>
+      <div id="ig-last" style="margin-top:10px;font-size:13.5px"></div>
+    </div>
+    <div class="card">
+      <h3>🎵 TikTok</h3>
+      <div id="tk-status" class="st st-off"><span class="dot"></span>—</div>
+      <p class="note" style="margin:8px 0 0">Lands in your TikTok <b>drafts</b> — open the app and tap Post. (Direct auto-publish needs TikTok to audit the app.)</p>
+      <div id="tk-last" style="margin-top:10px;font-size:13.5px"></div>
+    </div>
+  </div>
+  <div class="sec"><h2>Drip queue</h2><span class="note" id="cpq-note">waiting to post</span></div>
+  <div class="list" id="cpq-list"></div>
+  <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+    <button class="btn btn-primary" data-act="crosspost_now">Post one now</button>
+    <span class="note" id="cp-hint">Skips the daily wait and posts the next clip in the queue right away.</span>
   </div>
 </section>
 
@@ -1785,6 +1815,7 @@ function render(){
   } else {
     $("op-crosspost").innerHTML = '<span style="color:var(--muted)">off — add the Instagram/TikTok tokens on Render to enable</span>';
   }
+  paintSocial(cp);
 
   /* retention + system: painted fresh each pass, cheap string work */
   paintRetention(ana);
@@ -2542,6 +2573,40 @@ function paintRetention(ana){
   }
 }
 
+/* ---- Instagram + TikTok: the Social tab ----
+   Each platform gets its own card: connected/off, and the last drip result
+   (Reel live / draft ready / skipped). Below, the shared drip queue — the
+   Shorts waiting their one-a-day turn. */
+function cpStatus(el, on, onWord){
+  if (!el) return;
+  el.className = "st " + (on ? "st-done" : "st-off");
+  el.innerHTML = '<span class="dot"></span>' + (on ? onWord : "not connected — add its token on Render");
+}
+function cpLast(el, last){
+  if (!el) return;
+  if (!last){ el.innerHTML = '<span style="color:var(--muted)">Nothing posted yet — the first Short drips once a video is published.</span>'; return; }
+  const good = !!last.ok;
+  const mark = good ? '<span style="color:var(--green);font-weight:600">✓</span>' : '<span style="color:var(--red);font-weight:600">skipped</span>';
+  el.innerHTML = mark + ' <span style="color:var(--muted)">' + esc(last.when || "") + '</span><br>'
+    + esc(last.title || last.detail || "");
+}
+function paintSocial(cp){
+  cp = cp || {};
+  cpStatus($("ig-status"), cp.ig, "connected · posts a live Reel");
+  cpStatus($("tk-status"), cp.tiktok, "connected · posts a draft");
+  cpLast($("ig-last"), cp.ig_last);
+  cpLast($("tk-last"), cp.tiktok_last);
+  const q = cp.next || [], n = cp.queue || 0;
+  const note = $("cpq-note");
+  if (note) note.textContent = n ? (n + (n === 1 ? " Short waiting, one drips a day" : " Shorts waiting, one drips a day")) : "empty — Shorts land here when you publish a video";
+  const list = $("cpq-list");
+  if (list) list.innerHTML = q.length
+    ? q.map((t, i) => '<div class="rowline"><span class="grow ttl">' + esc(t) + '</span>' + (i === 0 ? '<span class="st st-wait"><span class="dot"></span>next up</span>' : '') + '</div>').join("")
+    : '<div class="rowline" style="color:var(--muted)">Nothing queued right now.</div>';
+  const btn = document.querySelector('[data-act="crosspost_now"]');
+  if (btn) btn.disabled = !(cp.ig || cp.tiktok) || !n;
+}
+
 /* ---- scene watch: which exact scene lost the audience ----
    The retention curve, mapped onto each long-form's scene timeline. The
    planner consumes the same findings; this is the owner's eye on them. */
@@ -2926,8 +2991,10 @@ def _crosspost_snapshot():
     except Exception:
         pass
     q = state.STATE.get("crosspost_queue") or []
+    last = state.STATE.get("crosspost_last") or {}
     return {"ig": ig_ok, "tiktok": tk_ok, "queue": len(q),
-            "next": [(c.get("title") or c.get("url", ""))[:60] for c in q[:5]]}
+            "next": [(c.get("title") or c.get("url", ""))[:60] for c in q[:8]],
+            "ig_last": last.get("ig"), "tiktok_last": last.get("tiktok")}
 
 
 @app.route("/panel")
@@ -3960,18 +4027,29 @@ def _crosspost_drip():
                if ok else f"skipped: {comms.esc(str(detail)[:180])}"),
             html=True)
 
+    when = f"{datetime.now() + config.BD_OFFSET:%b %d, %H:%M}"
+    last = state.STATE.setdefault("crosspost_last", {})
+
+    def remember(key, ok, detail):
+        last[key] = {"ok": bool(ok), "detail": str(detail)[:160],
+                     "title": clip.get("title", "")[:80], "when": when}
+
     if ig.configured():
         try:
             ok, detail = ig.publish_reel(url, caption)
         except Exception as e:
             ok, detail = False, e
         report("📸", "Instagram", ok, detail, "Reel live")
+        remember("ig", ok, detail)
     if tiktok.configured():
         try:
             ok, detail = tiktok.inbox_post(url)
         except Exception as e:
             ok, detail = False, e
         report("🎵", "TikTok", ok, detail, "draft ready")
+        remember("tiktok", ok, detail)
+    state.STATE["crosspost_last"] = last
+    state.save_soon()
     comms.log(f"crosspost drip: posted 1, {len(q)} left in queue")
 
 

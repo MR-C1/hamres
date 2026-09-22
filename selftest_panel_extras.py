@@ -87,9 +87,12 @@ def main():
           'data-k="duration"' in t and 'data-k="avg_pct"' in t, True)
 
     # ---- the JS parses: brackets balance, every $("id") exists ----
-    m = re.search(r"<script>(.*)</script>", t, re.S)
-    check("script block found", bool(m), True)
-    src = m.group(1)
+    # The page carries more than one <script> now (a tiny theme-before-paint
+    # guard in <head>, plus the main panel script). Match each block on its
+    # own — a greedy scan would splice the CSS+HTML between them into "JS".
+    blocks = re.findall(r"<script>(.*?)</script>", t, re.S)
+    check("script block found", bool(blocks), True)
+    src = "\n".join(blocks)   # for the $("id") sweep below
 
     def balanced(src):
         """Bracket balance with strings, // and /* comments, and regex
@@ -144,7 +147,8 @@ def main():
             i += 1
         return (not stack), ("".join(stack) if stack else "ok")
 
-    bal = balanced(src)
+    bal = next((balanced(b) for b in blocks if balanced(b) != (True, "ok")),
+               (True, "ok"))
     check("JS brackets balance", bal, (True, "ok"))
     ids = set(re.findall(r'\$\("([A-Za-z0-9_-]+)"\)', src))
     missing = sorted(i for i in ids if f'id="{i}"' not in t)

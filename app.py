@@ -264,6 +264,12 @@ LOGIN_HTML = """<!doctype html>
   --sans:'IBM Plex Sans',system-ui,sans-serif;
   --rad:2px;
 }
+@media (prefers-color-scheme:dark){:root{
+  --paper:#14120f; --card:#1c1a15;
+  --ink:#f2ede1; --muted:#a49d8b; --dim:#726b5a;
+  --rule:#332f26; --red:#e5544f; --red-dark:#c23a36;
+}
+.err{background:#2a1614!important}}
 *{box-sizing:border-box;margin:0;padding:0}
 html{-webkit-text-size-adjust:100%}
 body{background:var(--paper);color:var(--ink);font:15px/1.55 var(--sans);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
@@ -317,6 +323,8 @@ PANEL_HTML = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>FOOTNOTE Production Desk</title>
+<script>/* set the theme before first paint so there is no light-to-dark flash */
+try{var _t=localStorage.getItem("theme");if(_t)document.documentElement.setAttribute("data-theme",_t);}catch(e){}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -334,6 +342,30 @@ PANEL_HTML = r"""<!doctype html>
   --mono:'IBM Plex Mono',ui-monospace,monospace;
   --rad:2px;
 }
+/* dark mode — a warm, ink-on-charcoal reading of the same editorial
+   palette, driven off the OS unless the reader forces a mode with the
+   header toggle. Tokens only: every component recolours for free. */
+:root[data-theme="dark"]{
+  --paper:#14120f; --card:#1c1a15; --wash:#26231c;
+  --ink:#f2ede1; --muted:#a49d8b; --dim:#726b5a;
+  --rule:#332f26; --rule-soft:#2a271f;
+  --red:#e5544f; --red-dark:#c23a36; --red-lift:#f07a75;
+  --green:#5bbd77; --amber:#d6a53a; --blue:#7aa6e6;
+  --track:#4a2727;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#14120f; --card:#1c1a15; --wash:#26231c;
+    --ink:#f2ede1; --muted:#a49d8b; --dim:#726b5a;
+    --rule:#332f26; --rule-soft:#2a271f;
+    --red:#e5544f; --red-dark:#c23a36; --red-lift:#f07a75;
+    --green:#5bbd77; --amber:#d6a53a; --blue:#7aa6e6;
+    --track:#4a2727;
+  }
+}
+/* the two hardcoded pale-red panels would glare on charcoal */
+:root[data-theme="dark"] .loadfail,:root[data-theme="dark"] .err{background:#2a1614}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .loadfail,:root:not([data-theme="light"]) .err{background:#2a1614}}
 *{box-sizing:border-box;margin:0;padding:0}
 html{-webkit-text-size-adjust:100%}
 body{background:var(--paper);color:var(--ink);font:15px/1.55 var(--sans);padding:0 20px 90px}
@@ -530,8 +562,7 @@ th button:hover{color:var(--ink)}
 .btn-sm{padding:5px 12px;min-height:32px;font-size:13px}
 .linkbtn{background:none;border:0;padding:6px 8px;min-height:32px;font:500 13.5px var(--sans);color:var(--muted);cursor:pointer;border-radius:var(--rad);text-decoration:underline;text-underline-offset:3px}
 .linkbtn:hover{color:var(--red)}
-#alerts{text-decoration:none;border:1px solid var(--line,#3333);white-space:nowrap}
-#alerts.on{color:var(--gold,#c79a3a);border-color:currentColor}
+#alerts,#theme{white-space:nowrap}
 /* a row action never wraps: "Make private" on two lines reads like two links */
 td.act .linkbtn{white-space:nowrap}
 .actions{display:flex;flex-wrap:wrap;gap:8px}
@@ -675,6 +706,31 @@ body[data-role="visitor"] .field input{pointer-events:none;background:var(--wash
 .scn .short-cut{border-top:1px dashed var(--rule);margin-top:9px;padding-top:8px}
 .scn .short-cut .scn-t{font-size:13.5px;color:var(--muted)}
 
+/* ======================================================================
+   2026 refresh — an enhancement layer, not a teardown. Everything here
+   rides on the existing tokens + DOM ids, so it modernises the surface
+   (depth, motion, a real dark mode, a sticky nav) without disturbing a
+   single element the JS binds to. Splicing a rebuilt panel is what
+   regressed us before; this cannot. ==================================== */
+
+/* depth + rhythm: the flat cards gain a hairline shadow and lift on hover,
+   so the desk reads as layered paper instead of taped-down rectangles */
+.tile,.card,.chart,.list,.plot{box-shadow:0 1px 2px rgba(20,20,30,.04),0 6px 18px -12px rgba(20,20,30,.14)}
+.tile,.card,.chart{transition:box-shadow .18s ease,transform .18s ease,border-color .18s ease}
+.tile:hover,.chart:hover{transform:translateY(-1px);box-shadow:0 2px 4px rgba(20,20,30,.06),0 14px 30px -14px rgba(20,20,30,.22);border-color:var(--rule-soft)}
+.tile .value{font-variant-numeric:tabular-nums}
+
+/* a sticky tab strip: the nav stays put on long tabs (Ledger, Films) so the
+   reader never scrolls away from it. The masthead scrolls off naturally —
+   no fragile fixed offset to keep the two in sync. */
+nav{position:sticky;top:0;z-index:19;background:var(--paper);box-shadow:0 1px 0 var(--rule),0 6px 14px -12px rgba(20,20,30,.3)}
+@media (max-width:560px){nav{position:static;box-shadow:none}}
+
+/* header toggles (Alerts + Theme) share a pill look */
+#alerts,#theme{text-decoration:none;border:1px solid var(--rule);border-radius:999px;padding:5px 11px;min-height:30px;transition:border-color .15s,color .15s,background .15s}
+#alerts:hover,#theme:hover{color:var(--ink);border-color:var(--ink)}
+#alerts.on{color:var(--red);border-color:var(--red)}
+
 @media (prefers-reduced-motion:reduce){
   .mast-star.live .spokes,.st-render .dot{animation:none}
   /* the ring stays as a static mark; the "Working…" label is what carries it */
@@ -703,6 +759,7 @@ body[data-role="visitor"] .field input{pointer-events:none;background:var(--wash
          about auto-approve and a button label at the foot of the page -->
     <span class="pausedflag" id="pausedflag" hidden>agent paused</span>
     <span class="rolebadge" id="rolebadge" hidden><span class="dot"></span>visitor · read-only</span>
+    <button class="linkbtn" id="theme" title="Switch between light and dark">🌙 Dark</button>
     <button class="linkbtn" id="alerts" title="Get a desktop/phone notification when the agent queues a video, cross-posts, or hits a snag — so you never need Telegram">🔔 Alerts off</button>
     <a class="linkbtn" href="/panel/logout" id="signout">Sign out</a>
     <button id="refresh"></button>
@@ -1161,6 +1218,26 @@ function toast(msg, err, sticky){
   if (!sticky) toastTimer = setTimeout(() => t.classList.remove("show"), err ? 6000 : 3000);
 }
 $("toast").addEventListener("click", () => $("toast").classList.remove("show"));
+
+/* ---- theme (light / dark) ---------------------------------------------------
+   Follows the OS by default; the header toggle forces a mode and remembers it
+   in localStorage. Applied to <html> so the whole token set flips at once. */
+function applyTheme(){
+  const t = localStorage.getItem("theme");           // "light" | "dark" | null(=auto)
+  if (t) document.documentElement.setAttribute("data-theme", t);
+  else document.documentElement.removeAttribute("data-theme");
+  const dark = t === "dark" || (!t && window.matchMedia &&
+               window.matchMedia("(prefers-color-scheme: dark)").matches);
+  const b = $("theme"); if (b) b.textContent = dark ? "☀️ Light" : "🌙 Dark";
+}
+if ($("theme")) $("theme").addEventListener("click", () => {
+  const dark = document.documentElement.getAttribute("data-theme") === "dark"
+    || (!localStorage.getItem("theme") && window.matchMedia
+        && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  localStorage.setItem("theme", dark ? "light" : "dark");
+  applyTheme();
+});
+applyTheme();
 
 /* ---- browser notifications --------------------------------------------------
    The agent used to reach the owner only through Telegram. Every owner-facing

@@ -603,6 +603,31 @@ textarea:focus-visible{outline:2px solid var(--red);outline-offset:0}
 .log .row-film .b{color:#a8d8b4}
 .log .row-fail .b{color:#f0a3a3}
 
+/* ---- the Ledger reads dark, always ----
+   The log box was already ink-dark, but the page around it was paper
+   white, so the tab looked like a dark box dropped on a white sheet.
+   Override the tokens on just this section so the whole Ledger is one
+   warm charcoal console — its own surface, independent of the app's
+   light/dark toggle. Its own background + colour are set too, because
+   the section's text colour is inherited from <body> and a bare token
+   swap would otherwise leave the headings dark on the new dark ground. */
+#t-ledger{
+  --paper:#14120f; --card:#1c1a15; --wash:#26231c;
+  --ink:#f2ede1; --muted:#a49d8b; --dim:#726b5a;
+  --rule:#332f26; --rule-soft:#2a271f;
+  --red:#e5544f; --red-dark:#c23a36; --red-lift:#f07a75;
+  --green:#5bbd77; --amber:#d6a53a; --blue:#7aa6e6;
+  --track:#4a2727;
+  background:var(--paper); color:var(--ink);
+  border:1px solid var(--rule); border-radius:var(--rad);
+  padding:6px 22px 32px; margin-top:26px;
+}
+#t-ledger .sec:first-child{margin-top:20px}
+/* keep the log box a shade darker than its page, so it still reads as an
+   inset panel — and never resolves its pale text onto a pale --ink ground
+   (which is exactly how the box broke under the global dark theme). */
+#t-ledger .log{background:#0d0b09}
+
 /* ---- filter chips / small controls ---- */
 .lbar{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin:10px 0}
 .chipbtn{background:var(--paper);border:1px solid var(--rule);color:var(--muted);border-radius:999px;padding:5px 12px;min-height:32px;font:500 13px var(--sans);cursor:pointer}

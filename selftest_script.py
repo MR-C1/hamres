@@ -113,6 +113,28 @@ def main():
     calls["plan"] = ["not json at all", "still not json"]
     check("non-JSON returns None", brain._write_script("mysteries"), None)
 
+    # 6. _salvage_json — the groq "Unterminated string" recovery. The
+    #    render used to DIE when a fallback provider emitted raw newlines
+    #    inside a string, wrapped the object in prose, or got cut off at
+    #    the token cap. All three must recover to a usable dict.
+    clean = good_script(10)
+    check("salvage: clean JSON round-trips",
+          brain._salvage_json(clean) is not None
+          and brain._salvage_json(clean)["id"] == "test-10")
+    check("salvage: prose-wrapped object recovers",
+          (brain._salvage_json("Sure! Here is the script:\n" + clean
+                               + "\nHope that helps!") or {}).get("id")
+          == "test-10")
+    raw_nl = '{"id": "x", "title": "a\nb", "scenes": [1,2,3,4,5,6,7,8,9,10]}'
+    check("salvage: raw newline in a string value recovers",
+          (brain._salvage_json(raw_nl) or {}).get("id") == "x")
+    truncated = clean[:len(clean) - 40]  # chop the tail mid-structure
+    got = brain._salvage_json(truncated)
+    check("salvage: truncated reply closes open brackets to a dict",
+          isinstance(got, dict) and "id" in got)
+    check("salvage: pure garbage stays None",
+          brain._salvage_json("total nonsense, no braces"), None)
+
     print()
     if FAILS:
         print(f"{len(FAILS)} FAILED: {', '.join(FAILS)}")

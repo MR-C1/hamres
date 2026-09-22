@@ -1223,7 +1223,7 @@ async function act(a, btn, extra){
     try { d = await r.json(); }
     catch(e) { d = {ok:false, error:"the agent answered with something that isn't JSON"}; }
     if (d.ok === false || !r.ok) {
-      const why = d.error || ("the agent said " + r.status);
+      const why = d.error || d.msg || ("the agent said " + r.status);
       toast(why, true);
       jlog("panel", "refused — " + label + ": " + why);
       load(); return false;

@@ -77,7 +77,8 @@ def gemini(prompt, system=SYSTEM, gemini_models=None):
 # and honor the 8-12 scene format; the lite geminis (which wrote 3-6 scene
 # stubs) are deliberately kept OUT of this list, and stay in
 # llm.GEMINI_MODELS only for the short calls (scoring, comments, summaries).
-SCRIPT_GEMINI_MODELS = ["gemini-3.8-flash", "gemini-3.5-flash"]
+SCRIPT_GEMINI_MODELS = ["gemini-3.8-flash", "gemini-3.7-flash",
+                        "gemini-3.6-flash", "gemini-3.5-flash"]
 
 SCRIPT_PROMPT = """Write ONE video script for a faceless YouTube mind-tricks channel (dark psychology, persuasion tactics, brain glitches), as strict JSON only (no markdown, no commentary):
 
@@ -479,6 +480,53 @@ def _pick_thumbnail(script):
     return None
 
 
+def _salvage_json(t):
+    """Recover a script object from a chatty/loose/truncated model reply.
+    groq (the fallback when the flash geminis 503) frequently emits raw
+    newlines inside string values or gets cut off at the token cap, which
+    made json.loads die with 'Unterminated string' and FAIL the whole
+    render. Three passes: strict, control-char-tolerant, then a truncation
+    repair that trims to the last complete element and closes open
+    brackets. Returns a dict or None."""
+    if "{" in t and "}" in t:
+        t = t[t.index("{"): t.rindex("}") + 1]
+    for kw in ({}, {"strict": False}):
+        try:
+            d = json.loads(t, **kw)
+            if isinstance(d, dict):
+                return d
+        except Exception:
+            pass
+    # truncation repair: walk the text tracking string state + bracket
+    # depth, remember the last point a bracket closed OUTSIDE a string
+    # (a safe cut), then re-close whatever was still open there
+    stack, safe_len, safe_stack = [], 0, []
+    in_str = esc = False
+    for i, c in enumerate(t):
+        if esc:
+            esc = False
+        elif c == "\\":
+            esc = True
+        elif c == '"':
+            in_str = not in_str
+        elif in_str:
+            pass
+        elif c in "{[":
+            stack.append("}" if c == "{" else "]")
+        elif c in "}]":
+            if stack:
+                stack.pop()
+            safe_len, safe_stack = i + 1, list(stack)
+    head = t[:safe_len].rstrip().rstrip(",")
+    if not head:
+        return None
+    try:
+        d = json.loads(head + "".join(reversed(safe_stack)), strict=False)
+        return d if isinstance(d, dict) else None
+    except Exception:
+        return None
+
+
 def _parse_script(text, min_scenes=8):
     """JSON text -> script dict, or None (logged). A mini-doc needs its
     acts — a 4-scene stub means the provider squeezed the script (token
@@ -486,17 +534,21 @@ def _parse_script(text, min_scenes=8):
     "long-form". Answer-Shorts pass their own floor (4 scenes)."""
     if not text:
         return None
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
+    t = text.strip()
+    if t.startswith("```"):
+        t = t.split("```")[1]
+        if t.startswith("json"):
+            t = t[4:]
+    script = _salvage_json(t)
+    if not isinstance(script, dict):
+        comms.log(f"script parse failed: unrecoverable JSON ({text[:50]!r})")
+        return None
     try:
-        script = json.loads(text)
         if "id" not in script or "scenes" not in script:
             raise ValueError("missing keys")
-        if len(script["scenes"]) < min_scenes:
-            raise ValueError(f"too few scenes ({len(script['scenes'])}) "
-                             f"for the {min_scenes}+ scene format")
+        if len(script.get("scenes") or []) < min_scenes:
+            raise ValueError(f"too few scenes ({len(script.get('scenes') or [])})"
+                             f" for the {min_scenes}+ scene format")
         return script
     except Exception as e:
         comms.log(f"script parse failed: {e}")

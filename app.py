@@ -19,6 +19,7 @@ import brain
 import comms
 import config
 import jobs
+import push
 import state
 import yt
 
@@ -1320,15 +1321,53 @@ function alertsBtn(){
 }
 if ($("alerts")) $("alerts").addEventListener("click", async () => {
   if (!("Notification" in window)) { toast("This browser can't show notifications", true); return; }
-  if (Notification.permission === "granted") { toast("Alerts already on"); alertsBtn(); return; }
+  if (Notification.permission === "granted") { toast("Alerts already on"); alertsBtn(); ensurePush(); return; }
   if (Notification.permission === "denied") { toast("Notifications are blocked — unblock this site in your browser settings", true, true); return; }
   const p = await Notification.requestPermission();
   alertsBtn();
-  if (p === "granted") { try { new Notification("FOOTNOTE alerts on", {body:"You'll get a ping here when the agent queues a video, cross-posts, or hits a snag."}); } catch(e){} }
+  if (p === "granted") { try { new Notification("FOOTNOTE alerts on", {body:"You'll get a ping here when the agent queues a video, cross-posts, or hits a snag."}); } catch(e){} ensurePush(); }
 });
+/* ---- web push: alert the owner even when the panel is CLOSED (the true
+   Telegram replacement). We register a service worker, then subscribe with
+   the VAPID public key the server hands us in /api/state (window.VAPID),
+   and POST the subscription up once. A localStorage stamp keeps us from
+   re-posting the same subscription on every poll. */
+let PUSH_TRIED = false;
+function urlB64ToU8(b64){
+  const pad = "=".repeat((4 - b64.length % 4) % 4);
+  const s = (b64 + pad).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(s); const out = new Uint8Array(raw.length);
+  for (let i=0;i<raw.length;i++) out[i]=raw.charCodeAt(i);
+  return out;
+}
+async function ensurePush(){
+  try {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+    if (Notification.permission !== "granted") return;
+    if (!window.VAPID) return;                 /* server has no keys yet */
+    const reg = await navigator.serviceWorker.register("/sw.js");
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({userVisibleOnly: true,
+        applicationServerKey: urlB64ToU8(window.VAPID)});
+    }
+    /* only POST when it's new or the key rotated */
+    const stamp = JSON.stringify(sub).length + ":" + window.VAPID.slice(0,12);
+    if (localStorage.getItem("pushStamp") === stamp) return;
+    const r = await fetch("/api/push/subscribe", {method:"POST",
+      headers:{"Content-Type":"application/json"}, body: JSON.stringify(sub)});
+    if (r.ok) { localStorage.setItem("pushStamp", stamp); }
+  } catch(e){ /* push is a bonus channel; never let it throw into the poll */ }
+}
 /* fire a notification for every feed row past the last we showed. On the very
    first poll we only move the marker (seed it) so no backlog fires. */
 function pingNotify(d){
+  if (d && d.vapid) {
+    window.VAPID = d.vapid;
+    if (!PUSH_TRIED && ("Notification" in window) && Notification.permission === "granted") {
+      PUSH_TRIED = true; ensurePush();
+    }
+  }
   if (!d || !("Notification" in window) || Notification.permission !== "granted") {
     if (d && typeof d.notify_seq === "number" && !localStorage.getItem("notifiedId"))
       { NOTIFIED = d.notify_seq; localStorage.setItem("notifiedId", NOTIFIED); }
@@ -3133,6 +3172,55 @@ def panel_logout():
     return resp
 
 
+# Service worker for web push. Served from the site root so its scope
+# covers /panel; it only wakes to show a pushed notification and to focus
+# the panel when one is tapped — no caching, no offline logic.
+SW_JS = """
+self.addEventListener('push', function(e) {
+  var d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (err) { d = {body: e.data ? e.data.text() : ''}; }
+  var title = d.title || 'FOOTNOTE';
+  var opts = {body: d.body || '', tag: d.tag || ('fn' + Date.now()),
+              data: {url: d.url || '/panel'}, badge: undefined};
+  e.waitUntil(self.registration.showNotification(title, opts));
+});
+self.addEventListener('notificationclick', function(e) {
+  e.notification.close();
+  var url = (e.notification.data && e.notification.data.url) || '/panel';
+  e.waitUntil(clients.matchAll({type: 'window', includeUncontrolled: true}).then(function(cl) {
+    for (var i = 0; i < cl.length; i++) {
+      if (cl[i].url.indexOf('/panel') !== -1 && 'focus' in cl[i]) return cl[i].focus();
+    }
+    if (clients.openWindow) return clients.openWindow(url);
+  }));
+});
+"""
+
+
+@app.route("/sw.js")
+def service_worker():
+    resp = make_response(SW_JS)
+    resp.headers["Content-Type"] = "application/javascript"
+    resp.headers["Cache-Control"] = "no-cache"
+    # allow the root scope even though the file is at /sw.js
+    resp.headers["Service-Worker-Allowed"] = "/"
+    return resp
+
+
+@app.route("/api/push/subscribe", methods=["POST"])
+def api_push_subscribe():
+    """The panel POSTs a browser PushSubscription here after the owner turns
+    alerts on. Any signed-in viewer may register a device for alerts —
+    receiving pings is not a channel mutation."""
+    if not _panel_ok():
+        return jsonify({"ok": False, "error": "sign in at /panel"}), 403
+    sub = request.get_json(force=True, silent=True) or {}
+    ok = push.subscribe(sub)
+    if ok:
+        comms.log("panel: a browser subscribed to web-push alerts")
+    return jsonify({"ok": bool(ok), "push_on": push.available()})
+
+
 @app.route("/api/state")
 def api_state():
     if not _panel_ok():
@@ -3308,6 +3396,10 @@ def api_state():
         # last it showed, so this stays a few rows on every poll.
         "notify": state.STATE.get("notify_feed", [])[-12:],
         "notify_seq": state.STATE.get("notify_seq", 0),
+        # web-push key the panel subscribes with (empty until VAPID env is
+        # set) + whether push is live, so the panel can show its alert state
+        "vapid": push.public_key(),
+        "push_on": push.available(),
     }
     # The durable log and the whole output mailbox are only worth shipping
     # when the Ledger asks for them — the 15s poll stays small.
@@ -3970,6 +4062,14 @@ def report():
                 _record_decision(approval_id, early)
             elif state.STATE["settings"].get("auto_approve"):
                 _publish_now(approval_id, note="auto-approved")
+            else:
+                # a video is now sitting private on YouTube waiting for the
+                # owner's ✅/❌. The worker sends the Telegram preview
+                # (backup channel); this puts the SAME "needs you" event into
+                # the panel's notify_feed so the panel alerts on its own —
+                # the panel is the primary channel, Telegram just a fallback.
+                comms.notify(f"🎬 A video is waiting for your decision — "
+                             f"{data.get('title') or 'untitled'}")
         elif job is None:
             comms.send(f"⚠️ <b>Render reported for an unknown job</b> "
                        f"(<code>{comms.esc(job_id)}</code>) — state may have "

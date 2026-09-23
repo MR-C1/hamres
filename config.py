@@ -89,6 +89,16 @@ GIST_TOKEN = os.environ.get("GIST_TOKEN", "")
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "MR-C1/hamres")
 GITHUB_DISPATCH_TOKEN = os.environ.get("GITHUB_DISPATCH_TOKEN", "")
 
+# Web Push (browser notifications that reach the owner even when the panel
+# is CLOSED — the true Telegram replacement). Generate the keypair once with
+# tools/gen_vapid.py and paste all three into Render env. The PRIVATE key is
+# a secret and must never be committed (the repo is public); the PUBLIC key
+# is what the panel's JS subscribes with. VAPID_SUBJECT is a contact URL the
+# push services want — the panel URL or a mailto: both work.
+VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
+VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
+VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "")
+
 BD_OFFSET = timedelta(hours=6)  # Render's clock is UTC; Bangladesh is UTC+6
 
 # The panel's public URL — Telegram messages carry one-tap deep links into

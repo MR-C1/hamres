@@ -123,6 +123,16 @@ def _mirror_notify(text, html):
                      "body": body[:300]})
         del feed[:-40]
         state.save_soon()
+        # push it to the owner's browsers too, so the panel alerts even when
+        # it is closed (the whole point of replacing Telegram). Best-effort
+        # and a no-op unless VAPID keys are configured.
+        try:
+            import push
+            title = body.split("\n", 1)[0][:80]
+            rest = body[len(title):].strip()
+            push.send(title, rest)
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -156,6 +166,16 @@ def send(text, chat_id=None, html=False):
 
 def send_md(text, chat_id=None):
     return send(md(text), chat_id=chat_id, html=True)
+
+
+def notify(text, html=False):
+    """Panel-only notification: mirror into the durable notify_feed (which
+    the panel polls and turns into a browser/web-push alert) WITHOUT sending
+    to Telegram. For events whose Telegram side is already handled elsewhere
+    — the render worker sends its own ✅/❌ video preview, so the brain would
+    otherwise double-message — or that we deliberately want to live on the
+    panel only. Best-effort; a mirror failure never raises."""
+    _mirror_notify(text, html)
 
 
 def send_buttons(text, buttons, chat_id=None):

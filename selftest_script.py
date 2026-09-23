@@ -103,6 +103,17 @@ def main():
     out = brain._write_script("mysteries")
     check("fenced json parses", out is not None and len(out["scenes"]) == 9)
 
+    # 4b. a scene missing visual_keywords (or narration) is rejected the
+    #     same as a stub — the renderer's validate_script would ValueError
+    #     on it mid-render, so catch it here and spend the corrective retry
+    bad = json.loads(good_script(10))
+    del bad["scenes"][0]["visual_keywords"]
+    calls["n"] = 0
+    calls["plan"] = [json.dumps(bad), good_script(10)]
+    out = brain._write_script("mysteries")
+    check("scene missing visual_keywords is rejected, retry recovers",
+          out is not None and calls["n"] == 2)
+
     # 5. junk (None / non-JSON) -> None, no exception. A silent chain
     # must not burn the retry nudge — the model never saw anything.
     before = calls["n"]

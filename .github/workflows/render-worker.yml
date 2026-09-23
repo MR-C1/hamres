@@ -96,6 +96,13 @@ jobs:
       - name: Run worker (up to 40 minutes)
         env:
           WORKER_MAX_MINUTES: "300"
+          # ghassets.available() needs this in the process env to stage the
+          # finished Shorts as release assets — the public URLs Instagram/
+          # TikTok fetch. permissions: contents:write (above) grants the
+          # token the scope; this line is what actually hands it to Python.
+          # Without it ghassets silently no-ops and the cross-post drip
+          # queue never fills, even for a video that uploaded fine.
+          GITHUB_TOKEN: ${{ github.token }}
         run: python worker/worker.py
 
       - name: Show what happened

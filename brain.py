@@ -549,6 +549,15 @@ def _parse_script(text, min_scenes=8):
         if len(script.get("scenes") or []) < min_scenes:
             raise ValueError(f"too few scenes ({len(script.get('scenes') or [])})"
                              f" for the {min_scenes}+ scene format")
+        # every scene must carry what the renderer's validate_script demands
+        # (narration + visual_keywords). Catching it HERE routes a malformed
+        # scene into the corrective retry below; letting it through queues a
+        # job that dies on the runner mid-render (ValueError: "scene N needs
+        # 'narration' and 'visual_keywords'") — a whole wasted render slot.
+        for i, sc in enumerate(script["scenes"]):
+            if not (isinstance(sc, dict) and sc.get("narration")
+                    and sc.get("visual_keywords")):
+                raise ValueError(f"scene {i} missing narration/visual_keywords")
         return script
     except Exception as e:
         comms.log(f"script parse failed: {e}")

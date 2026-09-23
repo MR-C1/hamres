@@ -634,6 +634,9 @@ textarea:focus-visible{outline:2px solid var(--red);outline-offset:0}
 .chipbtn{background:var(--paper);border:1px solid var(--rule);color:var(--muted);border-radius:999px;padding:5px 12px;min-height:32px;font:500 13px var(--sans);cursor:pointer}
 .chipbtn:hover{color:var(--ink);border-color:var(--ink)}
 .chipbtn[aria-pressed=true]{background:var(--ink);border-color:var(--ink);color:var(--paper)}
+.ledsearch{flex:1 1 220px;max-width:420px;background:var(--paper);border:1px solid var(--rule);color:var(--ink);border-radius:8px;padding:6px 11px;min-height:34px;font:400 13.5px var(--sans)}
+.ledsearch:focus{outline:none;border-color:var(--ink)}
+.ledsearch::placeholder{color:var(--dim)}
 /* a chip that removes something: the × is the button, the label stays text */
 .chip .x{background:none;border:0;padding:0 0 0 2px;margin:0;color:var(--dim);font:600 14px/1 var(--sans);cursor:pointer;min-height:0}
 .chip .x:hover{color:var(--red)}
@@ -1138,6 +1141,9 @@ nav{position:sticky;top:0;z-index:19;background:var(--paper);box-shadow:0 1px 0 
     <button class="chipbtn" data-f="film" aria-pressed="false">Films</button>
     <button class="chipbtn" data-f="score" aria-pressed="false">Scores</button>
     <button class="chipbtn" data-f="fail" aria-pressed="false">Trouble</button>
+  </div>
+  <div class="lbar">
+    <input id="ledq" type="search" class="ledsearch" placeholder="Search the ledger…" aria-label="Search the ledger" autocomplete="off">
   </div>
   <div class="lbar">
     <button class="btn btn-sm" data-local="copylog">Copy the ledger</button>
@@ -2324,6 +2330,7 @@ function derived(d, add){
 }
 
 let LFILTER = "all";
+let LQUERY = "";
 document.addEventListener("click", e => {
   const c = e.target.closest(".lbar [data-f]");
   if (!c) return;
@@ -2331,11 +2338,20 @@ document.addEventListener("click", e => {
   document.querySelectorAll(".lbar [data-f]").forEach(x => x.setAttribute("aria-pressed", String(x === c)));
   paintLedger();
 });
+/* free-text search: find a specific failure/entry in a long feed without
+   scrolling. Debounced so typing stays smooth; matches the entry text. */
+let lqTimer;
+document.addEventListener("input", e => {
+  if (e.target.id !== "ledq") return;
+  clearTimeout(lqTimer);
+  lqTimer = setTimeout(() => { LQUERY = e.target.value.trim().toLowerCase(); paintLedger(); }, 150);
+});
 const SRCLBL = {agent: "", state: "reconstructed", here: "seen by this browser"};
 function lfilter(rows){
-  if (LFILTER === "all") return rows;
-  if (LFILTER === "fail") return rows.filter(r => r.bad);
-  return rows.filter(r => r.k === LFILTER);
+  if (LFILTER === "fail") rows = rows.filter(r => r.bad);
+  else if (LFILTER !== "all") rows = rows.filter(r => r.k === LFILTER);
+  if (LQUERY) rows = rows.filter(r => r.m.toLowerCase().indexOf(LQUERY) >= 0);
+  return rows;
 }
 function ledgerText(){
   return lfilter(ledgerRows()).map(r =>
@@ -2361,13 +2377,14 @@ function paintLedger(){
       '<span class="k">' + r.k + '</span>' +
       '<span class="b">' + esc(r.m) + '</span>' +
       (SRCLBL[r.s] ? '<span class="src">' + SRCLBL[r.s] + '</span>' : '') + '</div>').join("")
-  ).join("") || '<div>Nothing under this filter yet.</div>';
+  ).join("") || '<div>' + (LQUERY ? 'Nothing matches “' + esc(LQUERY) + '”.' : 'Nothing under this filter yet.') + '</div>';
 
   const cnt = {agent:0, state:0, here:0};
   all.forEach(r => { cnt[r.s] = (cnt[r.s] || 0) + 1; });
+  const shown = (LFILTER !== "all" || LQUERY);
   $("lednote").textContent = all.length + (all.length === 1 ? " entry" : " entries") +
     " — " + cnt.agent + " from the agent, " + cnt.state + " reconstructed, " +
-    cnt.here + " seen here" + (LFILTER === "all" ? "" : " · " + rows.length + " shown");
+    cnt.here + " seen here" + (shown ? " · " + rows.length + " shown" : "");
   const saved = DATA && DATA.log_tail ? DATA.log_tail.length : 0;
   $("ledhelp").textContent =
     "The agent's own log lives in memory and dies every time the free plan restarts it; " +

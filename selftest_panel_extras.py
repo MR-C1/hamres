@@ -85,6 +85,9 @@ def main():
           "[hidden]{display:none!important}" in t, True)
     check("format + retained columns in the films table",
           'data-k="duration"' in t and 'data-k="avg_pct"' in t, True)
+    check("ledger carries a free-text search box wired to LQUERY",
+          'id="ledq"' in t and "LQUERY" in t
+          and "r.m.toLowerCase().indexOf(LQUERY)" in t, True)
 
     # ---- the JS parses: brackets balance, every $("id") exists ----
     # The page carries more than one <script> now (a tiny theme-before-paint

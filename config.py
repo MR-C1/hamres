@@ -60,10 +60,12 @@ CEREBRAS_MODEL = os.environ.get("CEREBRAS_MODEL", "gpt-oss-120b")
 # OpenAI-compatible, ~20M tokens/day across models (the most generous
 # free quota of the lot). Runs strong open models — DeepSeek and big
 # Llama/Qwen — arguably matching or beating Gemini-flash for script
-# writing. If the default 404s, check docs.sambanova.ai for the current
-# model id and set SAMBANOVA_MODEL.
+# writing. Production model ids verified live 2026-09-23: DeepSeek-V3.1,
+# Meta-Llama-3.3-70B-Instruct, gpt-oss-120b, MiniMax-M2.7 (DeepSeek-V3.2
+# is preview-only). If the default 404s, check docs.sambanova.ai
+# /docs/en/models/sambacloud-models and set SAMBANOVA_MODEL.
 SAMBANOVA_API_KEY = os.environ.get("SAMBANOVA_API_KEY", "")
-SAMBANOVA_MODEL = os.environ.get("SAMBANOVA_MODEL", "DeepSeek-V3-0324")
+SAMBANOVA_MODEL = os.environ.get("SAMBANOVA_MODEL", "DeepSeek-V3.1")
 
 # YouTube: refresh token + client from the one-time extract_refresh_token.py run
 YT_REFRESH_TOKEN = os.environ.get("YT_REFRESH_TOKEN", "")

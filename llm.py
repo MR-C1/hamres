@@ -42,6 +42,16 @@ GEMINI_MODELS = ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite",
 import time as _time
 _key_cooldown = {}
 
+# the provider that most recently answered complete() — a live degradation
+# signal the panel reads: when it is anything but "gemini", the primary is
+# down and the chain is running on a backup. In-process memory, same as the
+# comms log ring the panel already tails.
+LAST_USED = {"provider": "", "model": "", "at": 0.0}
+
+
+def _mark_used(provider, model=""):
+    LAST_USED.update(provider=provider, model=model, at=_time.time())
+
 
 def _gemini_keys():
     """Usable Gemini keys — live keys first, cooling ones last resort."""
@@ -349,6 +359,7 @@ def search_complete(prompt, system=None, max_tokens=4000):
                                                        contents=prompt, config=cfg)
                     text = (r.text or "").strip()
                     if text:
+                        _mark_used("gemini")
                         return text
                 except Exception as e:
                     msg = str(e)
@@ -373,6 +384,7 @@ def search_complete(prompt, system=None, max_tokens=4000):
                 config.GROQ_SEARCH_MODEL, prompt, system, max_tokens)
             comms.log(f"search fallback used: groq "
                       f"({config.GROQ_SEARCH_MODEL}, web search)")
+            _mark_used("groq", config.GROQ_SEARCH_MODEL)
             return text
         except Exception as e:
             last_err = e
@@ -405,7 +417,9 @@ def complete(prompt, system=None, max_tokens=8000, gemini_models=None):
 
     if config.GEMINI_API_KEY:
         try:
-            return _gemini(prompt, system, max_tokens, gemini_models)
+            text = _gemini(prompt, system, max_tokens, gemini_models)
+            _mark_used("gemini")
+            return text
         except Exception as e:
             errors.append(f"gemini: {str(e)[:150]}")
 
@@ -415,6 +429,7 @@ def complete(prompt, system=None, max_tokens=8000, gemini_models=None):
                 "https://api.groq.com/openai", config.GROQ_API_KEY,
                 config.GROQ_MODEL, prompt, system, max_tokens)
             comms.log(f"fallback used: groq ({config.GROQ_MODEL})")
+            _mark_used("groq", config.GROQ_MODEL)
             return text
         except Exception as e:
             errors.append(f"groq: {str(e)[:150]}")
@@ -425,6 +440,7 @@ def complete(prompt, system=None, max_tokens=8000, gemini_models=None):
                 "https://api.cerebras.ai", config.CEREBRAS_API_KEY,
                 config.CEREBRAS_MODEL, prompt, system, max_tokens)
             comms.log(f"fallback used: cerebras ({config.CEREBRAS_MODEL})")
+            _mark_used("cerebras", config.CEREBRAS_MODEL)
             return text
         except Exception as e:
             errors.append(f"cerebras: {str(e)[:150]}")
@@ -435,6 +451,7 @@ def complete(prompt, system=None, max_tokens=8000, gemini_models=None):
                 "https://api.sambanova.ai", config.SAMBANOVA_API_KEY,
                 config.SAMBANOVA_MODEL, prompt, system, max_tokens)
             comms.log(f"fallback used: sambanova ({config.SAMBANOVA_MODEL})")
+            _mark_used("sambanova", config.SAMBANOVA_MODEL)
             return text
         except Exception as e:
             errors.append(f"sambanova: {str(e)[:150]}")
@@ -445,6 +462,7 @@ def complete(prompt, system=None, max_tokens=8000, gemini_models=None):
                 "https://openrouter.ai/api", config.OPENROUTER_API_KEY,
                 config.OPENROUTER_MODEL, prompt, system, max_tokens)
             comms.log(f"fallback used: openrouter ({config.OPENROUTER_MODEL})")
+            _mark_used("openrouter", config.OPENROUTER_MODEL)
             return text
         except Exception as e:
             errors.append(f"openrouter: {str(e)[:150]}")
@@ -455,6 +473,7 @@ def complete(prompt, system=None, max_tokens=8000, gemini_models=None):
                 _cf_base(), config.CF_API_TOKEN,
                 config.CF_MODEL, prompt, system, max_tokens)
             comms.log(f"fallback used: cloudflare ({config.CF_MODEL})")
+            _mark_used("cloudflare", config.CF_MODEL)
             return text
         except Exception as e:
             errors.append(f"cloudflare: {str(e)[:150]}")

@@ -1851,7 +1851,7 @@ function render(){
   /* retention + system: painted fresh each pass, cheap string work */
   paintRetention(ana);
   paintScenes(d.scenes);
-  paintHealth(d.health, ana);
+  paintHealth(d.health, ana, d.ai_last);
 
   /* jobs */
   $("queuenote").textContent = d.queue.pending + " waiting, " + d.queue.claimed + " rendering, " + d.queue.failed + " failed";
@@ -2668,12 +2668,14 @@ function paintScenes(scenes){
 }
 
 /* ---- system health: a wiring diagram, not a keyring ---- */
-function paintHealth(h, ana){
+function paintHealth(h, ana, aiLast){
   h = h || {};
   const chip = (on, label) => '<span class="chip'+(on ? ' on' : '')+'"><span class="dot"></span>'+esc(label)+'</span>';
   const ai = [
     chip((h.gemini_keys || 0) > 0, "gemini" + ((h.gemini_keys || 0) > 1 ? " ×" + h.gemini_keys : "")),
     chip(!!h.groq, "groq"),
+    chip(!!h.cerebras, "cerebras"),
+    chip(!!h.sambanova, "sambanova"),
     chip(!!h.openrouter, "openrouter"),
     chip(!!h.cloudflare, "cloudflare")
   ].join("");
@@ -2684,10 +2686,22 @@ function paintHealth(h, ana){
     chip(!!h.telegram, "telegram"),
     chip(!!h.dispatch, "renderer dispatch")
   ].join("");
+  /* who actually answered last: gemini = primary healthy; anything else means
+     the chain fell through to a backup and the owner should know at a glance */
+  const al = aiLast || {};
+  let live = "";
+  if (al.provider) {
+    const when = al.ago_min > 0 ? al.ago_min + " min ago" : "just now";
+    const model = al.model ? " (" + esc(al.model) + ")" : "";
+    live = al.provider === "gemini"
+      ? '<div class="rowline"><span style="flex:0 0 150px;color:var(--muted);font-size:13.5px">Answering now</span><span class="grow"><span class="st st-done"><span class="dot"></span>gemini</span> <span style="color:var(--muted);font-size:13px">'+when+'</span></span></div>'
+      : '<div class="rowline"><span style="flex:0 0 150px;color:var(--muted);font-size:13.5px">Answering now</span><span class="grow"><span class="st st-wait"><span class="dot"></span>on backup: '+esc(al.provider)+'</span>'+model+' <span style="color:var(--muted);font-size:13px">'+when+' — Gemini is down, scripts run on the fallback</span></span></div>';
+  }
   const ld = h.lastdiag || {};
   $("sysnote").textContent = "What the agent is wired to. Dim means not configured, not broken — the provider test says more.";
   $("sysbox").innerHTML =
     '<div class="rowline"><span style="flex:0 0 150px;color:var(--muted);font-size:13.5px">AI providers</span><span class="grow"><span class="hchips">'+ai+'</span></span></div>'+
+    live+
     '<div class="rowline"><span style="flex:0 0 150px;color:var(--muted);font-size:13.5px">Connections</span><span class="grow"><span class="hchips">'+conn+'</span></span></div>'+
     '<div class="rowline"><span style="flex:0 0 150px;color:var(--muted);font-size:13.5px">Provider test</span><span class="grow" style="min-width:0">'+
       (ld.text
@@ -2996,6 +3010,8 @@ def _health_snapshot():
     return {
         "gemini_keys": len(config.GEMINI_API_KEYS or []),
         "groq": bool(config.GROQ_API_KEY),
+        "cerebras": bool(config.CEREBRAS_API_KEY),
+        "sambanova": bool(config.SAMBANOVA_API_KEY),
         "openrouter": bool(config.OPENROUTER_API_KEY),
         "cloudflare": bool(config.CF_API_TOKEN and config.CF_ACCOUNT_ID),
         "youtube": bool(config.YT_REFRESH_TOKEN and config.YT_CLIENT_ID),
@@ -3005,6 +3021,24 @@ def _health_snapshot():
         "dispatch": bool(config.GITHUB_DISPATCH_TOKEN),
         "lastdiag": dict(_last_diag),
     }
+
+
+def _ai_last_snapshot():
+    """The provider that most recently answered a generation call, and how
+    long ago. The panel flags it amber when it is anything but gemini —
+    that means the primary is down and scripts are being written on a
+    backup, the loudest possible 'Gemini situation' signal without waiting
+    for a diag. In-process memory (llm.LAST_USED), so it resets on a
+    restart and simply reads empty until the next generation."""
+    try:
+        import llm
+        lu = llm.LAST_USED
+    except Exception:
+        return {}
+    if not lu.get("provider") or not lu.get("at"):
+        return {}
+    return {"provider": lu["provider"], "model": lu.get("model", ""),
+            "ago_min": int((time.time() - lu["at"]) / 60)}
 
 
 def _crosspost_snapshot():
@@ -3239,6 +3273,8 @@ def api_state():
         "analytics": _analytics_snapshot(vids),
         # provider wiring (booleans only) + the last provider-test output
         "health": _health_snapshot(),
+        # which provider actually answered last — a live degradation signal
+        "ai_last": _ai_last_snapshot(),
         "uploads_today": uploads_today,
         # newest text answer a panel button asked for (diag/chat/report)
         "out": (state.STATE.get("panel_out") or [None])[-1],

@@ -186,14 +186,32 @@ def main():
     h = d["health"]
     check("health carries the wiring keys",
           sorted(k for k in h if k != "lastdiag"),
-          ["analytics_token", "cloudflare", "dispatch", "gemini_keys",
-           "gist", "groq", "openrouter", "telegram", "youtube"])
+          ["analytics_token", "cerebras", "cloudflare", "dispatch",
+           "gemini_keys", "gist", "groq", "openrouter", "sambanova",
+           "telegram", "youtube"])
     scalars = [v for k, v in h.items() if k != "lastdiag"]
     check("health values are booleans/counts only",
           all(isinstance(v, (bool, int)) for v in scalars), True)
     check("health lastdiag is a dict of strings",
           isinstance(h["lastdiag"], dict)
           and all(isinstance(v, str) for v in h["lastdiag"].values()), True)
+
+    # ---- ai_last: which provider actually answered last (degradation signal) ----
+    # empty until a generation call marks it
+    import llm as llmmod
+    llmmod.LAST_USED.update(provider="", model="", at=0.0)
+    check("ai_last is empty before any generation",
+          c.get("/api/state").get_json().get("ai_last"), {})
+    # a backup answering means the primary is down — the panel flags it
+    llmmod._mark_used("sambanova", "DeepSeek-V3.1")
+    al = c.get("/api/state").get_json().get("ai_last")
+    check("ai_last names the backup that answered",
+          (al.get("provider"), al.get("model")), ("sambanova", "DeepSeek-V3.1"))
+    check("ai_last reports minutes-ago as a number",
+          isinstance(al.get("ago_min"), int), True)
+    # the panel renders the "answering now" line and the backup wording
+    check("panel shows the live answering-provider line",
+          'aiLast' in t and 'on backup: ' in t, True)
 
     # ---- the script action ----
     appmod.state.STATE["jobs"] = [

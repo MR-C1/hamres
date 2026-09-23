@@ -264,6 +264,46 @@ def main():
     check("thumb job reports ok with its text", res.get("ok") is True
           and "NEW" in res.get("msg", ""))
 
+    # 11. _stage_shorts: the cross-post staging gate. A silent miss here
+    #     starved the Instagram/TikTok drip for weeks (the worker step never
+    #     passed GITHUB_TOKEN) — every path is now observable and tested.
+    ssid = "stagetest"
+    REVIEW.mkdir(parents=True, exist_ok=True)
+    sfiles = [(f"{ssid}_short.mp4", "Hook Title"),
+              (f"{ssid}_xshort1.mp4", "Scene One"),
+              (f"{ssid}_long.mp4", "Hook Title")]
+    for nm, _ in sfiles:
+        (REVIEW / nm).write_bytes(b"0" * 16)
+    fake_gh = types.ModuleType("ghassets")
+    staged = []
+    fake_gh.available = lambda: True
+    fake_gh.upload = lambda path, name: (staged.append(name)
+                                         or f"https://host/{name}")
+    real_gh = sys.modules.get("ghassets")
+    sys.modules["ghassets"] = fake_gh
+    try:
+        au = worker_mod._stage_shorts(sfiles, ssid)
+        check("staging uploads both Shorts, skips the long-form",
+              sorted(staged) == [f"{ssid}_short.mp4", f"{ssid}_xshort1.mp4"])
+        check("a clip per Short carries its own title",
+              [c["title"] for c in au.get("clips", [])]
+              == ["Hook Title", "Scene One"])
+        check("the hook Short keeps its backward-compat url",
+              au.get("short") == f"https://host/{ssid}_short.mp4")
+        fake_gh.available = lambda: False
+        check("no GITHUB_TOKEN -> nothing staged (the bug this fixes)",
+              worker_mod._stage_shorts(sfiles, ssid) == {})
+        fake_gh.available = lambda: True
+        check("no Short files -> empty asset_urls",
+              worker_mod._stage_shorts([(f"{ssid}_long.mp4", "x")], ssid) == {})
+    finally:
+        if real_gh is None:
+            sys.modules.pop("ghassets", None)
+        else:
+            sys.modules["ghassets"] = real_gh
+        for nm, _ in sfiles:
+            (REVIEW / nm).unlink(missing_ok=True)
+
     print()
     if FAILS:
         print(f"{len(FAILS)} FAILED: {', '.join(FAILS)}")

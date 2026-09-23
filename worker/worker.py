@@ -267,6 +267,48 @@ def _short_title(scene, script_title):
     return title if len(keep) == len(words) else title + "…"
 
 
+def _stage_shorts(files, sid):
+    """Host every Short at a public URL so the brain can drip it to
+    Instagram/TikTok (their APIs fetch the video from a URL). Returns
+    asset_urls — {} when nothing was staged.
+
+    Every exit says WHY, and a staging miss on the Actions runner logs a
+    WARNING: the old inline version was silent, so a missing GITHUB_TOKEN
+    starved the cross-post drip for weeks while YouTube uploads looked
+    perfectly healthy. "short" in the name catches the hook Short and the
+    scene-Shorts; the long-form is never cross-posted."""
+    import ghassets
+    shorts = [(name, title) for name, title in files
+              if "short" in name and (REVIEW / name).exists()]
+    if not shorts:
+        return {}
+    if not ghassets.available():
+        # expected on the PC worker (no GITHUB_TOKEN); a real misconfig on
+        # Actions, where permissions:contents:write + the built-in token
+        # should make it available
+        log.warning("%d Short(s) NOT staged for cross-post — ghassets "
+                    "unavailable (no GITHUB_TOKEN in env); Instagram/TikTok "
+                    "drip stays empty for this video", len(shorts))
+        return {}
+    asset_urls, clips = {}, []
+    for name, title in shorts:
+        u = ghassets.upload(REVIEW / name, name)
+        if not u:
+            log.warning("cross-post staging failed for %s", name)
+            continue
+        if name == f"{sid}_short.mp4":
+            asset_urls["short"] = u   # backward compat
+        clips.append({"url": u, "title": title})
+    if clips:
+        asset_urls["clips"] = clips
+        log.info("staged %d Short(s) for Instagram/TikTok cross-post",
+                 len(clips))
+    else:
+        log.warning("cross-post staging produced no URLs for %d Short(s) — "
+                    "drip queue stays empty", len(shorts))
+    return asset_urls
+
+
 def _upload_files(script, sid):
     import upload
     meta = {"title": script["title"],
@@ -346,23 +388,7 @@ def _upload_files(script, sid):
     asset_urls = {}
     if urls:
         try:
-            import ghassets
-            if ghassets.available():
-                clips = []
-                for name, title in files:
-                    if "short" not in name:
-                        continue
-                    fp = REVIEW / name
-                    if not fp.exists():
-                        continue
-                    u = ghassets.upload(fp, name)
-                    if not u:
-                        continue
-                    if name == f"{sid}_short.mp4":
-                        asset_urls["short"] = u   # backward compat
-                    clips.append({"url": u, "title": title})
-                if clips:
-                    asset_urls["clips"] = clips
+            asset_urls = _stage_shorts(files, sid)
         except Exception as e:
             log.warning("asset staging failed: %s", e)
     # whatever uploaded rides the report — partial success still

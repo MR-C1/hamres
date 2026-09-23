@@ -72,6 +72,18 @@ def _claim_ttl(job):
     return min(max(2400, _cost_minutes(job) * 120), 6 * 3600)
 
 
+def stale_claim(job, now=None):
+    """True when a claimed job has gone quiet longer than a worker could
+    plausibly still be alive — the next worker poll hands it back to the
+    queue. Exposed (and used by next_job below) so the panel can flag a
+    'stuck' render with the exact same rule the reaper enforces, instead
+    of guessing a threshold the dynamic TTL would contradict."""
+    if job.get("status") != "claimed":
+        return False
+    now = time.time() if now is None else now
+    return (now - job.get("updated", now)) > _claim_ttl(job)
+
+
 def next_job(max_cost_minutes=None):
     """Claim the oldest pending job the caller can afford. Re-syncs the
     queue from the gist first (source of truth), so a job queued by any
@@ -84,8 +96,8 @@ def next_job(max_cost_minutes=None):
     # several stale claims wait through that many sequential round trips.
     stale = False
     for job in state.STATE["jobs"]:
-        quiet = now - job["updated"]
-        if job["status"] == "claimed" and quiet > _claim_ttl(job):
+        if stale_claim(job, now):
+            quiet = now - job["updated"]
             job["status"] = "pending"
             job["updated"] = now
             stale = True

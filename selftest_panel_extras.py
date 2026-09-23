@@ -286,6 +286,22 @@ def main():
     check("panel job card shows the reason in a .why line",
           'class="why"' in t, True)
 
+    # a claim gone quiet past its TTL surfaces as "stuck" so a dead runner
+    # is visible instead of a job frozen forever on "rendering"
+    import time as _t
+    appmod.state.STATE["jobs"] = [
+        {"id": "hung", "type": "render", "status": "claimed",
+         "created": _t.time() - 6000, "updated": _t.time() - 6000,
+         "script": {"id": "h", "title": "A hung render"}},
+        {"id": "busy", "type": "render", "status": "claimed",
+         "created": _t.time(), "updated": _t.time() - 120,
+         "script": {"id": "b", "title": "Still rendering"}}]
+    js = {j["id"]: j.get("stuck") for j in c.get("/api/state").get_json()["jobs"]}
+    check("a long-quiet claim is flagged stuck", js.get("hung"), True)
+    check("a fresh claim is not flagged stuck", js.get("busy"), False)
+    check("panel renders a stuck signal on the job card",
+          "j.stuck" in t and "requeued automatically" in t, True)
+
     # ---- _analytics_compute: the merge ----
     class FakeYA:
         @staticmethod

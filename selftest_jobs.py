@@ -177,6 +177,24 @@ def main():
     check("empty stats on either side",
           _merge_stats([], [{"date": "d"}]), [{"date": "d"}])
 
+    # ---- stale_claim: the reaper's rule, also read by the panel ----
+    # a tiny job's TTL floors at 40 min; a claim quiet past that is presumed
+    # dead (the panel flags it "stuck" with this very function)
+    import jobs
+    now = time.time()
+    check("a pending job is never stuck",
+          jobs.stale_claim(job("p", "pending", created=now, updated=now), now),
+          False)
+    check("a fresh claim is not stuck",
+          jobs.stale_claim(job("c", "claimed", created=now, updated=now - 600), now),
+          False)
+    check("a claim quiet past its TTL is stuck",
+          jobs.stale_claim(job("c", "claimed", created=now, updated=now - 5000), now),
+          True)
+    check("a done job is never stuck",
+          jobs.stale_claim(job("d", "done", created=now, updated=now - 99999), now),
+          False)
+
     print()
     if fails:
         print(f"{len(fails)} FAILED: {', '.join(fails)}")

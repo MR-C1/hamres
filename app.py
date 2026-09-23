@@ -1860,13 +1860,16 @@ function render(){
   paintHealth(d.health, ana, d.ai_last);
 
   /* jobs */
-  $("queuenote").textContent = d.queue.pending + " waiting, " + d.queue.claimed + " rendering, " + d.queue.failed + " failed";
+  const stuckN = (d.jobs || []).filter(j => j.stuck).length;
+  $("queuenote").textContent = d.queue.pending + " waiting, " + d.queue.claimed + " rendering, " + d.queue.failed + " failed" +
+    (stuckN ? " · " + stuckN + " stuck" : "");
   const STMAP = {pending:["wait","waiting"],claimed:["render","rendering"],done:["done","done"],failed:["fail","failed"]};
   $("jobs").innerHTML = d.jobs.slice(-12).reverse().map(j => {
-    const st = STMAP[j.status] || ["off","unknown"];
+    const st = j.stuck ? ["wait","stuck"] : (STMAP[j.status] || ["off","unknown"]);
     /* .cl labels are hidden until the table reflows into blocks on phones */
     return '<tr><td class="ttl lead">'+esc(j.title||j.type)+
-      (j.status === "failed" && j.msg ? '<div class="why">'+esc(trim(j.msg,140))+'</div>' : '')+'</td>'+
+      (j.status === "failed" && j.msg ? '<div class="why">'+esc(trim(j.msg,140))+'</div>' : '')+
+      (j.stuck ? '<div class="why">The worker went quiet mid-render — it will be requeued automatically on the next poll.</div>' : '')+'</td>'+
       '<td><span class="cl">Status</span><span class="st st-'+st[0]+'"><span class="dot"></span>'+st[1]+'</span></td>'+
       '<td class="num"><span class="cl">Age</span>'+dur(j.age)+'</td>'+
       '<td class="mono"><span class="cl">Job</span>'+esc(String(j.id).slice(0,8))+'</td>'+
@@ -3234,6 +3237,11 @@ def api_state():
                   # it inline on a failure so "why did this render die?" is
                   # answered in the ledger instead of digging through Actions
                   "msg": (j.get("result", {}).get("msg") or "")[:160],
+                  # a claim that has gone quiet past its plausible render
+                  # time: the next worker poll reclaims it, but the panel
+                  # flags it now so a dead runner is visible, not a job
+                  # frozen on "rendering" forever
+                  "stuck": jobs.stale_claim(j, now),
                   "has_script": bool(j.get("script"))}
                  for j in jobs_list],
         "direction": state.STATE.get("topic_direction", ""),

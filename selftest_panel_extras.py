@@ -244,6 +244,27 @@ def main():
     got = {j["id"]: j.get("has_script") for j in d["jobs"]}
     check("jobs expose has_script", got, {"job1": True, "job2": False})
 
+    # a failed render surfaces WHY, straight from the worker's report — the
+    # panel ledger/card show it inline instead of sending the owner to Actions
+    appmod.state.STATE["jobs"] = [
+        {"id": "fail1", "type": "render", "status": "failed",
+         "created": time.time(),
+         "script": {"id": "sf", "title": "A doomed render"},
+         "result": {"msg": "ffmpeg exited 1: no audio stream"}},
+        {"id": "ok1", "type": "render", "status": "done",
+         "created": time.time(),
+         "result": {"msg": "", "video_url": "https://youtu.be/ok"}}]
+    r = c.get("/api/state")
+    jm = {j["id"]: j.get("msg") for j in r.get_json()["jobs"]}
+    check("a failed job carries its reason as msg",
+          jm.get("fail1"), "ffmpeg exited 1: no audio stream")
+    check("a clean job carries an empty msg", jm.get("ok1"), "")
+    # and the panel HTML actually renders that reason (ledger diff + card)
+    check("panel ledger appends the failure reason",
+          'j.status === "failed" && j.msg' in t and 'trim(j.msg' in t, True)
+    check("panel job card shows the reason in a .why line",
+          'class="why"' in t, True)
+
     # ---- _analytics_compute: the merge ----
     class FakeYA:
         @staticmethod

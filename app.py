@@ -477,6 +477,7 @@ details.tbl tbody tr:hover{background:var(--wash)}
 .rowline:last-child{border-bottom:0}
 .rowline .grow{flex:1;min-width:180px}
 .ttl{font-weight:600;color:var(--ink)}
+.why{font-weight:400;font-size:12px;color:var(--red);margin-top:3px;line-height:1.35}
 a.ttl{color:var(--ink);text-decoration:none;background:linear-gradient(var(--red),var(--red)) left bottom/0 1px no-repeat;transition:background-size .15s;padding-bottom:1px}
 a.ttl:hover{background-size:100% 1px}
 .scorebar{width:56px;height:9px;border-radius:2px;background:var(--wash);overflow:hidden;flex:none}
@@ -1626,7 +1627,12 @@ function watch(prev, d){
   (d.jobs || []).forEach(j => {
     const lbl = trim(j.title || j.type);
     if (!(j.id in was)) jlog("render", "queued: " + lbl);
-    else if (was[j.id] !== j.status) jlog("render", STWORD(was[j.id]) + " → " + STWORD(j.status) + ": " + lbl);
+    else if (was[j.id] !== j.status) {
+      /* on a failure, carry the worker's reason into the line so the ledger
+         answers "why did it die?" without a trip to Actions */
+      const why = (j.status === "failed" && j.msg) ? " — " + trim(j.msg, 120) : "";
+      jlog("render", STWORD(was[j.id]) + " → " + STWORD(j.status) + ": " + lbl + why);
+    }
   });
   (prev.jobs || []).forEach(j => {
     if (!(d.jobs || []).some(x => x.id === j.id)) jlog("render", "left the queue: " + trim(j.title || j.type));
@@ -1853,7 +1859,8 @@ function render(){
   $("jobs").innerHTML = d.jobs.slice(-12).reverse().map(j => {
     const st = STMAP[j.status] || ["off","unknown"];
     /* .cl labels are hidden until the table reflows into blocks on phones */
-    return '<tr><td class="ttl lead">'+esc(j.title||j.type)+'</td>'+
+    return '<tr><td class="ttl lead">'+esc(j.title||j.type)+
+      (j.status === "failed" && j.msg ? '<div class="why">'+esc(trim(j.msg,140))+'</div>' : '')+'</td>'+
       '<td><span class="cl">Status</span><span class="st st-'+st[0]+'"><span class="dot"></span>'+st[1]+'</span></td>'+
       '<td class="num"><span class="cl">Age</span>'+dur(j.age)+'</td>'+
       '<td class="mono"><span class="cl">Job</span>'+esc(String(j.id).slice(0,8))+'</td>'+
@@ -3171,6 +3178,11 @@ def api_state():
                   "age": int((now - j.get("created", now)) / 60),
                   "title": (j.get("script", {}).get("title") or
                             j.get("result", {}).get("msg", ""))[:60],
+                  # the reason a job ended, straight from the worker's report
+                  # (jobs.complete_job stores it as result.msg) — the panel shows
+                  # it inline on a failure so "why did this render die?" is
+                  # answered in the ledger instead of digging through Actions
+                  "msg": (j.get("result", {}).get("msg") or "")[:160],
                   "has_script": bool(j.get("script"))}
                  for j in jobs_list],
         "direction": state.STATE.get("topic_direction", ""),

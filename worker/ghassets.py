@@ -19,6 +19,7 @@ import os
 import requests
 
 API = "https://api.github.com"
+UPLOADS = "https://uploads.github.com"
 TAG = "media-cache"
 
 
@@ -55,6 +56,23 @@ def _get_release(repo, tok):
     return r.json()
 
 
+def _upload_url(rel):
+    """The host for uploading a release asset is uploads.github.com, NOT
+    api.github.com — posting the bytes to the api host 404s (which is
+    exactly what silently starved the cross-post drip: every Short upload
+    failed with a 404 and only the WARNING in _stage_shorts showed it).
+
+    GitHub hands back the right base in the release's `upload_url`, as an
+    RFC-6570 template ending in `{?name,label}`; strip the template and add
+    our own ?name=. Fall back to building the uploads URL by hand if the
+    field is ever missing."""
+    tmpl = rel.get("upload_url") or ""
+    if tmpl:
+        return tmpl.split("{", 1)[0]
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    return f"{UPLOADS}/repos/{repo}/releases/{rel['id']}/assets"
+
+
 def upload(path, name):
     """Upload one file under a date-stamped name (a re-render retry must
     not 422 on an existing asset name). Returns the public
@@ -75,8 +93,7 @@ def upload(path, name):
                     f"{API}/repos/{repo}/releases/assets/{a['id']}",
                     headers=_headers(tok), timeout=20)
         r = requests.post(
-            f"{API}/repos/{repo}/releases/{rel['id']}/assets"
-            f"?name={_t.strftime('%Y%m%d')}-{name}",
+            f"{_upload_url(rel)}?name={_t.strftime('%Y%m%d')}-{name}",
             headers=_headers(tok, upload=True),
             data=open(path, "rb").read(), timeout=300)
         r.raise_for_status()

@@ -1831,19 +1831,6 @@ def _thumb_verdicts(report):
                    html=True)
 
 
-def apply_title(uid):
-    p = state.STATE["pending_titles"].pop(uid, None)
-    if not p:
-        return "Already handled."
-    try:
-        yt.update_title(p["video_id"], p["title"])
-        state.save_soon()
-        return "Title updated ✅"
-    except Exception as e:
-        state.STATE["pending_titles"][uid] = p
-        return f"Failed: {e}"
-
-
 # ---------------------------------------------------------------------------
 # weekly summary
 # ---------------------------------------------------------------------------

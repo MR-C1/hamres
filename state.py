@@ -13,7 +13,6 @@ STATE shape:
   "pending_videos": { uuid: {title, paths, meta, job_id} },
   "early_decisions": { approval_id: "approved"|"rejected" },  # tapped early
   "pending_replies": { uuid: {comment_id, draft, video_title} },
-  "pending_titles":  { uuid: {video_id, title, current} },
   "replied_comments": [...],
   "settings": {paused, auto_approve, approved_count, auto_approve_after,
                publish_hour},
@@ -396,7 +395,6 @@ def default_state():
     STATE.setdefault("pending_videos", {})
     STATE.setdefault("early_decisions", {})
     STATE.setdefault("pending_replies", {})
-    STATE.setdefault("pending_titles", {})
     STATE.setdefault("replied_comments", [])
     STATE.setdefault("settings", {
         "paused": False,

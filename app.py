@@ -1000,14 +1000,12 @@ nav{position:sticky;top:0;z-index:19;background:var(--paper);box-shadow:0 1px 0 
   <div class="sec"><h2>Decisions</h2><span class="note">Finished renders, private on YouTube until you call them.</span></div>
   <div id="decisions"></div>
 
-  <!-- Comment replies and title renames were approvable only from Telegram. The
-       panel can do everything the phone can now; the headings hide themselves
-       when there is nothing in either queue. -->
+  <!-- Comment replies were approvable only from Telegram. The panel can do
+       everything the phone can now; the heading hides itself when the queue
+       is empty. (Underperformer retitles are applied automatically now — the
+       agent no longer asks, it just swaps and reports.) -->
   <div class="sec" id="sec-replies" hidden><h2>Comment replies</h2><span class="note">Drafted by the agent, posted only on your word.</span></div>
   <div id="replies"></div>
-
-  <div class="sec" id="sec-titles" hidden><h2>Title changes</h2><span class="note">Renames proposed for films already published.</span></div>
-  <div id="titles"></div>
 </section>
 
 <!-- ============ STUDIO ============ -->
@@ -1064,9 +1062,10 @@ nav{position:sticky;top:0;z-index:19;background:var(--paper);box-shadow:0 1px 0 
       <div class="actions">
         <button class="btn" data-act="report">Today's report</button>
         <button class="btn" data-act="plan">Re-plan topics</button>
-        <button class="btn" data-act="titlecheck">Check published titles</button>
+        <button class="btn" data-act="titlecheck">Fix weak titles</button>
         <button class="btn" data-act="comments">Read new comments</button>
         <button class="btn" data-act="diag">Test AI providers</button>
+        <button class="btn" data-act="probe_models">Probe Gemini models</button>
       </div>
     </div>
     <div class="agroup danger">
@@ -1402,9 +1401,10 @@ const NICE = {next:"New video queued", idea:"Script queued", chat:"Asked the man
   wake:"Renderer woken", direction:"Guidance saved", set_hour:"Publish hour saved",
   set_after:"Threshold saved", killjob:"Job cancelled", forget:"Topic freed up",
   clear_out:"Answers cleared", reply:"Reply posting", skipreply:"Reply dropped",
-  title:"Renaming", keeptitle:"Title kept", report:"Report on its way",
-  plan:"Planning", titlecheck:"Checking titles", comments:"Reading comments",
+  report:"Report on its way",
+  plan:"Planning", titlecheck:"Weak titles auto-fixed", comments:"Reading comments",
   diag:"Testing the providers", branding:"Channel identity saved",
+  probe_models:"Probing Gemini models",
   thumb_test:"Thumbnail A/B started"};
 const BUSY = {next:"Queueing…", idea:"Writing…", chat:"Asking…", publish:"Publishing…",
   reject:"Deleting…", retry:"Requeueing…", pause:"Pausing…", resume:"Resuming…",
@@ -1702,8 +1702,6 @@ function watch(prev, d){
   /* work waiting on the owner elsewhere */
   const rw = new Set((prev.replies || []).map(r => r.id));
   (d.replies || []).forEach(r => { if (!rw.has(r.id)) jlog("agent", "a reply is drafted and waiting: " + trim(r.comment, 50)); });
-  const tw = new Set((prev.titles || []).map(t => t.id));
-  (d.titles || []).forEach(t => { if (!tw.has(t.id)) jlog("agent", "a better title is proposed: " + trim(t.title, 60)); });
   /* settings, whoever changed them */
   const a = prev.settings || {}, b = d.settings || {};
   if (a.auto_approve !== b.auto_approve) jlog("panel", "auto-approve is now " + (b.auto_approve ? "on" : "off"));
@@ -1788,8 +1786,8 @@ function render(){
   $("pausedflag").hidden = !d.settings.paused;
 
   /* nav badge — everything that is actually waiting on the owner, not just films:
-     a drafted reply and a proposed title are decisions too */
-  const held = (d.queue.awaiting || 0) + ((d.replies || []).length) + ((d.titles || []).length);
+     a drafted reply is a decision too */
+  const held = (d.queue.awaiting || 0) + ((d.replies || []).length);
   const nb = $("navdec");
   nb.textContent = held;
   nb.classList.toggle("zero", !held);
@@ -2006,22 +2004,6 @@ function render(){
     '<div class="actions">'+
       '<button class="btn btn-primary" data-act="reply:'+esc(r.id)+'">Post this reply</button>'+
       '<button class="btn" data-act="skipreply:'+esc(r.id)+'">Don’t answer</button>'+
-    '</div></div>').join("");
-
-  /* proposed renames for films already public */
-  const tts = d.titles || [];
-  $("sec-titles").hidden = !tts.length;
-  $("titles").innerHTML = tts.map(t =>
-    '<div class="card">'+
-    '<div class="rowline" style="border:0;padding:0 0 6px">'+
-      (t.vid ? '<a class="ttl" href="https://youtu.be/'+esc(t.vid)+'" target="_blank" rel="noopener">'+esc(t.current || "")+'</a>'
-             : '<span class="ttl">'+esc(t.current || "")+'</span>')+
-      '<span class="grow"></span><span class="chip">now</span></div>'+
-    '<div class="rowline" style="border:0;padding:0 0 10px"><span class="ttl" style="color:var(--blue)">'+esc(t.title || "")+'</span>'+
-      '<span class="grow"></span><span class="chip">proposed</span></div>'+
-    '<div class="actions">'+
-      '<button class="btn btn-primary" data-act="title:'+esc(t.id)+'">Use the new title</button>'+
-      '<button class="btn" data-act="keeptitle:'+esc(t.id)+'">Keep the old one</button>'+
     '</div></div>').join("");
 
   /* studio — the guidance is editable now, so it must not be overwritten under a
@@ -3282,10 +3264,6 @@ def api_state():
                 "video": (r.get("video_title") or "")[:70],
                 "comment": (r.get("comment") or r.get("text") or "")[:300]}
                for uid, r in state.STATE.get("pending_replies", {}).items()]
-    titles = [{"id": uid, "vid": t.get("video_id", ""),
-               "current": (t.get("current") or "")[:90],
-               "title": (t.get("title") or "")[:90]}
-              for uid, t in state.STATE.get("pending_titles", {}).items()]
     out = {
         "channel": {"title": ch.get("title", "?"),
                     "subs": ch.get("subs", 0), "views": ch.get("views", 0),
@@ -3315,7 +3293,6 @@ def api_state():
         "started": int(STARTED_AT),
         "pending": pending_detail,
         "replies": replies,
-        "titles": titles,
         "jobs": [{"id": j["id"], "type": j["type"], "status": j["status"],
                   "age": int((now - j.get("created", now)) / 60),
                   "title": (j.get("script", {}).get("title") or
@@ -3815,19 +3792,6 @@ def api_action():
             state.save_soon()
         return jsonify({"ok": bool(p),
                         "error": "" if p else "not pending"})
-    if a.startswith("title:"):
-        uid = a.split(":", 1)[1]
-        if uid not in state.STATE.get("pending_titles", {}):
-            return jsonify({"ok": False, "error": "not pending"})
-        _bg("panel: apply title",
-            lambda: _panel_out("title", brain.apply_title(uid)))
-        return jsonify({"ok": True, "started": True, "msg": "Renaming…"})
-    if a.startswith("keeptitle:"):
-        gone = state.STATE.get("pending_titles", {}).pop(
-            a.split(":", 1)[1], None)
-        state.save_soon()
-        return jsonify({"ok": bool(gone),
-                        "error": "" if gone else "not pending"})
 
     # ---- settings + queue surgery ---------------------------------------
     if a.startswith("set_hour:"):
@@ -3882,7 +3846,8 @@ def api_action():
                            + comms.esc(str(e)[:200]), html=True)
         threading.Thread(target=_drip_now, daemon=True).start()
         return jsonify({"ok": True,
-                        "msg": "Posting one now — watch Telegram."})
+                        "msg": "Posting one now — the result lands in "
+                               "Answers and the Ledger."})
     if a == "probe_models":
         # Ground-truth which Gemini models THIS key can actually reach and
         # generate with — gemini-flash-latest is a dead alias (503). Uses
@@ -4369,12 +4334,6 @@ def handle_callback(cb):
                 p["comment_id"])
             state.save_soon()
         comms.send("Skipped.")
-    elif action == "t":
-        comms.send(brain.apply_title(uid))
-    elif action == "tx":
-        state.STATE["pending_titles"].pop(uid, None)
-        state.save_soon()
-        comms.send("Keeping current title.")
 
 
 # ---------------------------------------------------------------------------

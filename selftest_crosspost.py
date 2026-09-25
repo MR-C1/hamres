@@ -333,6 +333,9 @@ def main():
     fake_comms_mod.send = fake_send
     fake_comms_mod.send_md = fake_send
     fake_comms_mod.send_buttons = fake_send
+    # panel-only mirror (feed + web push, no Telegram); /report calls it when a
+    # video is waiting on a decision. Record it like a send so the fake is faithful.
+    fake_comms_mod.notify = fake_send
     fake_comms_mod.log = lambda m: fake_comms_mod.LOG.append(m)
     fake_comms_mod.register_menu = lambda: None
     fake_comms_mod.panel_link = lambda path="": f"https://panel.test/panel{path}"
